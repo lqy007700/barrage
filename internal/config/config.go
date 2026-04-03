@@ -1,6 +1,9 @@
 package config
 
-import "runtime"
+import (
+	"runtime"
+	"time"
+)
 
 // Config 表示应用配置
 type Config struct {
@@ -9,6 +12,12 @@ type Config struct {
 
 	// WorkerPoolSize 表示业务协程池大小
 	WorkerPoolSize int
+
+	// SensitiveWordsPath 表示敏感词词库文件路径
+	SensitiveWordsPath string
+
+	// SensitiveWordsReloadInterval 表示敏感词词库热更新检查间隔
+	SensitiveWordsReloadInterval time.Duration
 
 	// 是否启用 Kafka
 	EnableKafka bool
@@ -26,8 +35,10 @@ type Config struct {
 // Load 返回默认配置
 func Load() *Config {
 	return &Config{
-		ListenAddr:     "tcp://0.0.0.0:9000",
-		WorkerPoolSize: runtime.NumCPU() * 1024,
+		ListenAddr:                   "tcp://0.0.0.0:9000",
+		WorkerPoolSize:               runtime.NumCPU() * 1024,
+		SensitiveWordsPath:           "configs/sensitive_words.txt",
+		SensitiveWordsReloadInterval: 2 * time.Second,
 
 		// 本地开发默认关闭 Kafka
 		EnableKafka: false,

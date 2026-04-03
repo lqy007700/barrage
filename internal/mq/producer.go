@@ -32,7 +32,7 @@ func NewProducer(brokers []string, topic string) *Producer {
 }
 
 // Publish 发送广播消息到 Kafka
-// 这里使用 RoomID 作为 Key，确保同房间消息落到同一 partition，保证房间内有序
+// 这里使用 RoomId 作为 Key，确保同房间消息落到同一 partition，保证房间内有序
 func (p *Producer) Publish(msg *BroadcastEnvelope) error {
 	if p == nil || msg == nil {
 		return nil
@@ -44,7 +44,7 @@ func (p *Producer) Publish(msg *BroadcastEnvelope) error {
 	}
 
 	return p.writer.WriteMessages(context.Background(), kafka.Message{
-		Key:   []byte(strconv.FormatInt(msg.RoomID, 10)),
+		Key:   []byte(strconv.FormatInt(msg.RoomId, 10)),
 		Value: value,
 	})
 }

@@ -1,38 +1,25 @@
 package mq
 
-import "encoding/json"
+import (
+	"barrage/internal/pb"
 
-// BroadcastEnvelope 表示广播链路中的统一消息结构
-type BroadcastEnvelope struct {
-	// 房间 ID
-	RoomID int64 `json:"room_id"`
+	"google.golang.org/protobuf/proto"
+)
 
-	// 发送者用户 ID
-	UserID int64 `json:"user_id"`
+// BroadcastEnvelope 是对 protobuf 生成类型的业务别名
+// 这样 mq 层可以直接复用 pb 中的消息定义，避免在 Kafka 链路外再包一层 JSON。
+type BroadcastEnvelope = pb.BroadcastEnvelope
 
-	// 发送者连接 ID
-	SenderConnID string `json:"sender_conn_id"`
-
-	// 是否为付费用户
-	IsPremium bool `json:"is_premium"`
-
-	// 业务负载
-	Payload []byte `json:"payload"`
-
-	// 毫秒时间戳
-	Timestamp int64 `json:"timestamp"`
-}
-
-// EncodeBroadcastEnvelope 将广播消息序列化
+// EncodeBroadcastEnvelope 将广播消息序列化为 protobuf 二进制
 func EncodeBroadcastEnvelope(msg *BroadcastEnvelope) ([]byte, error) {
-	return json.Marshal(msg)
+	return proto.Marshal(msg)
 }
 
-// DecodeBroadcastEnvelope 将广播消息反序列化
+// DecodeBroadcastEnvelope 将广播消息从 protobuf 二进制反序列化
 func DecodeBroadcastEnvelope(data []byte) (*BroadcastEnvelope, error) {
-	var msg BroadcastEnvelope
-	if err := json.Unmarshal(data, &msg); err != nil {
+	msg := &pb.BroadcastEnvelope{}
+	if err := proto.Unmarshal(data, msg); err != nil {
 		return nil, err
 	}
-	return &msg, nil
+	return msg, nil
 }

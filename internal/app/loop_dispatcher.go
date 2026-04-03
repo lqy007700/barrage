@@ -2,9 +2,9 @@ package app
 
 import (
 	"context"
-	"sync"
-
+	"errors"
 	"github.com/panjf2000/gnet/v2"
+	"sync"
 )
 
 // LoopDispatcher 用于把任务派发回指定的 event-loop 执行
@@ -36,19 +36,20 @@ func (d *LoopDispatcher) Bind(loopIdx int, loop gnet.EventLoop) {
 
 // Dispatch 将任务派发到指定 loop 执行
 func (d *LoopDispatcher) Dispatch(loopIdx int, task func()) error {
-	if d == nil || task == nil {
-		return nil
+	if d == nil {
+		return errors.New("loop dispatcher is nil")
+	}
+
+	if task == nil {
+		return errors.New("loop task is nil")
 	}
 
 	d.mu.RLock()
 	loop, ok := d.loops[loopIdx]
 	d.mu.RUnlock()
-	if !ok || loop == nil {
-		// 如果当前 loop 还没登记成功，则先退化为当前 goroutine 执行
-		task()
-		return nil
+	if !ok {
+		return errors.New("target event-loop is not bound")
 	}
-
 	return loop.Execute(
 		context.Background(),
 		gnet.RunnableFunc(func(ctx context.Context) error {

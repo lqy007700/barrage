@@ -74,6 +74,27 @@ message BroadcastMsg {
   int64 timestamp = 4;
 }
 
+// Kafka 广播链路中的统一消息体
+message BroadcastEnvelope {
+  // 房间 ID
+  int64 room_id = 1;
+
+  // 发送者用户 ID
+  int64 user_id = 2;
+
+  // 发送者连接 ID
+  string sender_conn_id = 3;
+
+  // 是否为付费用户
+  bool is_premium = 4;
+
+  // 最终可直接下发给客户端的 protobuf 二进制负载
+  bytes payload = 5;
+
+  // 毫秒时间戳
+  int64 timestamp = 6;
+}
+
 // 心跳消息
 message Heartbeat {
   // 客户端时间戳

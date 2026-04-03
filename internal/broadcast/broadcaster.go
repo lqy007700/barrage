@@ -10,23 +10,29 @@ import (
 	"github.com/panjf2000/gnet/v2"
 )
 
-// LoopTaskDispatcher 表示一个按 loop 下标分发任务的函数
-type LoopTaskDispatcher func(loopIdx int, task func()) error
-
 // Broadcaster 表示广播器
 type Broadcaster struct {
 	// 房间管理器
 	Rooms *room.Manager
 
 	// 按 loop 分发任务的函数
-	Dispatch LoopTaskDispatcher
+	LoopExec LoopExecutor
+}
+
+type LoopExecutor interface {
+	Dispatch(loopIdx int, task func()) error
 }
 
 // New 创建广播器
-func New(rooms *room.Manager, dispatch LoopTaskDispatcher) *Broadcaster {
+func New(rooms *room.Manager, loopExec LoopExecutor) *Broadcaster {
+	if loopExec == nil {
+		panic("请指定 loop 分发任务函数")
+		return nil
+	}
+
 	return &Broadcaster{
 		Rooms:    rooms,
-		Dispatch: dispatch,
+		LoopExec: loopExec,
 	}
 }
 
@@ -35,8 +41,7 @@ func (b *Broadcaster) BroadcastLocal(msg *mq.BroadcastEnvelope) error {
 	if b == nil || b.Rooms == nil || msg == nil {
 		return nil
 	}
-
-	loopIndexes := b.Rooms.ActiveLoopIndexes(msg.RoomID)
+	loopIndexes := b.Rooms.ActiveLoopIndexes(msg.RoomId)
 	if len(loopIndexes) == 0 {
 		return nil
 	}
@@ -44,16 +49,12 @@ func (b *Broadcaster) BroadcastLocal(msg *mq.BroadcastEnvelope) error {
 	for _, loopIdx := range loopIndexes {
 		currentLoopIdx := loopIdx
 
-		if b.Dispatch == nil {
-			b.broadcastInLoop(currentLoopIdx, msg)
-			continue
-		}
-
-		err := b.Dispatch(currentLoopIdx, func() {
+		err := b.LoopExec.Dispatch(currentLoopIdx, func() {
 			b.broadcastInLoop(currentLoopIdx, msg)
 		})
+
 		if err != nil {
-			log.Printf("派发广播任务失败: roomID=%d loopIdx=%d err=%v", msg.RoomID, currentLoopIdx, err)
+			log.Printf("派发广播任务失败: roomID=%d loopIdx=%d err=%v", msg.RoomId, currentLoopIdx, err)
 			continue
 		}
 	}
@@ -70,7 +71,7 @@ func (b *Broadcaster) broadcastInLoop(loopIdx int, msg *mq.BroadcastEnvelope) {
 
 	frame := ws.BuildBinaryFrame(msg.Payload)
 
-	b.Rooms.RangeShardInLoop(msg.RoomID, loopIdx, func(connID string, c gnet.Conn) {
+	b.Rooms.RangeShardInLoop(msg.RoomId, loopIdx, func(connID string, c gnet.Conn) {
 		if c == nil {
 			return
 		}
@@ -81,7 +82,7 @@ func (b *Broadcaster) broadcastInLoop(loopIdx int, msg *mq.BroadcastEnvelope) {
 		}
 
 		// 发送连接本身不回显自己的消息
-		if msg.SenderConnID != "" && ctx.ConnID == msg.SenderConnID {
+		if msg.SenderConnId != "" && ctx.ConnID == msg.SenderConnId {
 			return
 		}
 

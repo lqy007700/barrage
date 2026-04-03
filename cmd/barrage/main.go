@@ -5,9 +5,8 @@ import (
 	"barrage/internal/config"
 	"barrage/internal/server"
 	"context"
-	"log"
-
 	"github.com/panjf2000/gnet/v2"
+	"log"
 )
 
 func main() {
@@ -17,6 +16,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("创建应用失败: %v", err)
 	}
+
+	application.StartTextFilterReload(context.Background())
 
 	// 启动 Kafka 消费者
 	application.StartConsumer(context.Background())

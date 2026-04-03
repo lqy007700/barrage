@@ -4,6 +4,7 @@ import (
 	"barrage/internal/broadcast"
 	"barrage/internal/config"
 	"barrage/internal/dispatcher"
+	"barrage/internal/filter"
 	"barrage/internal/mq"
 	"barrage/internal/pb"
 	"barrage/internal/room"
@@ -27,6 +28,9 @@ type App struct {
 
 	// loop 任务分发器
 	LoopDispatcher *LoopDispatcher
+
+	// 敏感词过滤
+	TextFilter filter.Filter
 
 	// gnet 引擎对象
 	Engine gnet.Engine
@@ -73,7 +77,21 @@ func New(cfg *config.Config) (*App, error) {
 		LoopDispatcher: NewLoopDispatcher(),
 	}
 
-	a.Broadcaster = broadcast.New(roomManager, a.DispatchToLoop)
+	defaultSensitiveWords := []string{
+		"傻逼",
+		"他妈的",
+		"垃圾",
+	}
+
+	reloadableFilter := filter.NewReloadableFilter(cfg.SensitiveWordsPath, defaultSensitiveWords)
+	if cfg.SensitiveWordsPath != "" {
+		if err := reloadableFilter.LoadNow(); err != nil {
+			log.Printf("加载敏感词词库失败，继续使用内置默认词表: path=%s err=%v", cfg.SensitiveWordsPath, err)
+		}
+	}
+	a.TextFilter = reloadableFilter
+
+	a.Broadcaster = broadcast.New(roomManager, a.LoopDispatcher)
 
 	// 只有显式启用 Kafka 时才初始化
 	if cfg.EnableKafka && len(cfg.KafkaBrokers) > 0 && cfg.KafkaTopic != "" {
@@ -87,6 +105,20 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	return a, nil
+}
+
+// StartTextFilterReload 启动敏感词热更新。
+func (a *App) StartTextFilterReload(ctx context.Context) {
+	if a == nil || a.Config == nil {
+		return
+	}
+
+	reloadableFilter, ok := a.TextFilter.(*filter.ReloadableFilter)
+	if !ok || reloadableFilter == nil {
+		return
+	}
+
+	reloadableFilter.StartAutoReload(ctx, a.Config.SensitiveWordsReloadInterval)
 }
 
 // BindEngine 绑定 gnet 引擎
@@ -112,7 +144,7 @@ func (a *App) HandleMQBroadcast(msg *mq.BroadcastEnvelope) error {
 	}
 
 	// Kafka 消费后的消息，只在本机有该房间连接时才进行广播
-	if !a.RoomManager.HasLocalRoom(msg.RoomID) {
+	if !a.RoomManager.HasLocalRoom(msg.RoomId) {
 		return nil
 	}
 
@@ -182,6 +214,21 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 		return
 	}
 
+	// 对聊天内容做敏感词检测
+	// 命中后直接驳回，不再向房间广播
+	if a.TextFilter != nil {
+		filterResult := a.TextFilter.Check(msg.Content)
+		if filterResult.Hit {
+			log.Printf("消息因敏感词被驳回: roomID=%d userID=%d connID=%s words=%v",
+				task.Ctx.RoomID,
+				task.Ctx.UserID,
+				task.Ctx.ConnID,
+				filterResult.Words,
+			)
+			return
+		}
+	}
+
 	outFrame := &pb.Frame{
 		Op:        pb.OpType_OP_BROADCAST,
 		RoomId:    task.Ctx.RoomID,
@@ -197,9 +244,9 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	}
 
 	envelope := &mq.BroadcastEnvelope{
-		RoomID:       task.Ctx.RoomID,
-		UserID:       task.Ctx.UserID,
-		SenderConnID: task.Ctx.ConnID,
+		RoomId:       task.Ctx.RoomID,
+		UserId:       task.Ctx.UserID,
+		SenderConnId: task.Ctx.ConnID,
 		IsPremium:    task.Ctx.IsPremium,
 		Payload:      data,
 		Timestamp:    time.Now().UnixMilli(),
@@ -210,16 +257,16 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	if a.Producer != nil {
 		if err := a.Producer.Publish(envelope); err != nil {
 			log.Printf("发送 Kafka 消息失败: roomID=%d userID=%d err=%v",
-				envelope.RoomID,
-				envelope.UserID,
+				envelope.RoomId,
+				envelope.UserId,
 				err,
 			)
 			return
 		}
 
 		log.Printf("聊天消息已发送到 Kafka: roomID=%d userID=%d content=%s payloadSize=%d",
-			envelope.RoomID,
-			envelope.UserID,
+			envelope.RoomId,
+			envelope.UserId,
 			msg.Content,
 			len(envelope.Payload),
 		)
@@ -227,11 +274,11 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	}
 
 	// 如果当前未配置 Kafka，则退化为单机本地广播
-	if a.RoomManager.HasLocalRoom(envelope.RoomID) && a.Broadcaster != nil {
+	if a.RoomManager.HasLocalRoom(envelope.RoomId) && a.Broadcaster != nil {
 		if err := a.Broadcaster.BroadcastLocal(envelope); err != nil {
 			log.Printf("本机广播失败: roomID=%d userID=%d err=%v",
-				envelope.RoomID,
-				envelope.UserID,
+				envelope.RoomId,
+				envelope.UserId,
 				err,
 			)
 			return
@@ -239,8 +286,8 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	}
 
 	log.Printf("收到聊天消息并完成本机广播: roomID=%d userID=%d content=%s payloadSize=%d",
-		envelope.RoomID,
-		envelope.UserID,
+		envelope.RoomId,
+		envelope.UserId,
 		msg.Content,
 		len(envelope.Payload),
 	)
@@ -276,16 +323,4 @@ func (a *App) ResolveLoopIdx(c gnet.Conn) int {
 	}
 
 	return loopIdx
-}
-
-// DispatchToLoop 将任务派发到指定逻辑 loop 执行
-func (a *App) DispatchToLoop(loopIdx int, task func()) error {
-	if a == nil || a.LoopDispatcher == nil {
-		if task != nil {
-			task()
-		}
-		return nil
-	}
-
-	return a.LoopDispatcher.Dispatch(loopIdx, task)
 }

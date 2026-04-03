@@ -347,6 +347,97 @@ func (x *BroadcastMsg) GetTimestamp() int64 {
 	return 0
 }
 
+// Kafka 广播链路中的统一消息体
+type BroadcastEnvelope struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 房间 ID
+	RoomId int64 `protobuf:"varint,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
+	// 发送者用户 ID
+	UserId int64 `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	// 发送者连接 ID
+	SenderConnId string `protobuf:"bytes,3,opt,name=sender_conn_id,json=senderConnId,proto3" json:"sender_conn_id,omitempty"`
+	// 是否为付费用户
+	IsPremium bool `protobuf:"varint,4,opt,name=is_premium,json=isPremium,proto3" json:"is_premium,omitempty"`
+	// 最终可直接下发给客户端的 protobuf 二进制负载
+	Payload []byte `protobuf:"bytes,5,opt,name=payload,proto3" json:"payload,omitempty"`
+	// 毫秒时间戳
+	Timestamp     int64 `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BroadcastEnvelope) Reset() {
+	*x = BroadcastEnvelope{}
+	mi := &file_internal_pb_barrage_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BroadcastEnvelope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BroadcastEnvelope) ProtoMessage() {}
+
+func (x *BroadcastEnvelope) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_pb_barrage_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BroadcastEnvelope.ProtoReflect.Descriptor instead.
+func (*BroadcastEnvelope) Descriptor() ([]byte, []int) {
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *BroadcastEnvelope) GetRoomId() int64 {
+	if x != nil {
+		return x.RoomId
+	}
+	return 0
+}
+
+func (x *BroadcastEnvelope) GetUserId() int64 {
+	if x != nil {
+		return x.UserId
+	}
+	return 0
+}
+
+func (x *BroadcastEnvelope) GetSenderConnId() string {
+	if x != nil {
+		return x.SenderConnId
+	}
+	return ""
+}
+
+func (x *BroadcastEnvelope) GetIsPremium() bool {
+	if x != nil {
+		return x.IsPremium
+	}
+	return false
+}
+
+func (x *BroadcastEnvelope) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *BroadcastEnvelope) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
 // 心跳消息
 type Heartbeat struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -358,7 +449,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[4]
+	mi := &file_internal_pb_barrage_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -370,7 +461,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[4]
+	mi := &file_internal_pb_barrage_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -383,7 +474,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{4}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Heartbeat) GetClientTs() int64 {
@@ -415,7 +506,15 @@ const file_internal_pb_barrage_proto_rawDesc = "" +
 	"\aroom_id\x18\x01 \x01(\x03R\x06roomId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x12\n" +
 	"\x04body\x18\x03 \x01(\fR\x04body\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"(\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"\xc2\x01\n" +
+	"\x11BroadcastEnvelope\x12\x17\n" +
+	"\aroom_id\x18\x01 \x01(\x03R\x06roomId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12$\n" +
+	"\x0esender_conn_id\x18\x03 \x01(\tR\fsenderConnId\x12\x1d\n" +
+	"\n" +
+	"is_premium\x18\x04 \x01(\bR\tisPremium\x12\x18\n" +
+	"\apayload\x18\x05 \x01(\fR\apayload\x12\x1c\n" +
+	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\"(\n" +
 	"\tHeartbeat\x12\x1b\n" +
 	"\tclient_ts\x18\x01 \x01(\x03R\bclientTs*[\n" +
 	"\x06OpType\x12\x0e\n" +
@@ -439,14 +538,15 @@ func file_internal_pb_barrage_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_pb_barrage_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_pb_barrage_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_internal_pb_barrage_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_internal_pb_barrage_proto_goTypes = []any{
-	(OpType)(0),          // 0: barrage.OpType
-	(*Frame)(nil),        // 1: barrage.Frame
-	(*JoinRoomReq)(nil),  // 2: barrage.JoinRoomReq
-	(*ChatMsg)(nil),      // 3: barrage.ChatMsg
-	(*BroadcastMsg)(nil), // 4: barrage.BroadcastMsg
-	(*Heartbeat)(nil),    // 5: barrage.Heartbeat
+	(OpType)(0),               // 0: barrage.OpType
+	(*Frame)(nil),             // 1: barrage.Frame
+	(*JoinRoomReq)(nil),       // 2: barrage.JoinRoomReq
+	(*ChatMsg)(nil),           // 3: barrage.ChatMsg
+	(*BroadcastMsg)(nil),      // 4: barrage.BroadcastMsg
+	(*BroadcastEnvelope)(nil), // 5: barrage.BroadcastEnvelope
+	(*Heartbeat)(nil),         // 6: barrage.Heartbeat
 }
 var file_internal_pb_barrage_proto_depIdxs = []int32{
 	0, // 0: barrage.Frame.op:type_name -> barrage.OpType
@@ -468,7 +568,7 @@ func file_internal_pb_barrage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_pb_barrage_proto_rawDesc), len(file_internal_pb_barrage_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
