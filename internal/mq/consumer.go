@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -40,10 +41,12 @@ func (c *Consumer) Start(ctx context.Context) {
 		msg, err := c.reader.ReadMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
+				log.Printf("Kafka 消费者捕捉到关闭信号，正常退出")
 				return
 			}
 
-			log.Printf("读取 Kafka 消息失败: %v", err)
+			log.Printf("读取 Kafka 消息失败，将在 1 秒后重连重试: %v", err)
+			time.Sleep(time.Second)
 			continue
 		}
 

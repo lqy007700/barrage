@@ -24,6 +24,18 @@ enum OpType {
 
   // 服务端返回错误
   OP_ERROR = 5;
+
+  // 系统消息 / 公告
+  OP_SYSTEM = 6;
+}
+
+// 系统下发的公告或事件通知
+message SystemMsg {
+  // 消息内容
+  string content = 1;
+
+  // 消息类型（如 1: 公告，2: 房间通知，3: 系统事件等）
+  int32 type = 2;
 }
 
 // 服务端下发的错误消息
@@ -63,6 +75,9 @@ message JoinRoomReq {
 
   // 是否为付费用户
   bool is_premium = 3;
+
+  // 鉴权 token
+  string token = 4;
 }
 
 // 聊天消息体

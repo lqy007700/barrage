@@ -6,6 +6,7 @@ import (
 	"barrage/internal/dispatcher"
 	"barrage/internal/protocol/ws"
 	"bytes"
+	"time"
 
 	"github.com/panjf2000/gnet/v2"
 )
@@ -17,6 +18,13 @@ type EventHandler struct {
 
 	// 应用总对象
 	App *app.App
+}
+
+// OnShutdown 在服务停机关闭时触发
+func (h *EventHandler) OnShutdown(eng gnet.Engine) {
+	if h.App != nil {
+		h.App.Close()
+	}
 }
 
 // OnBoot 在服务启动完成后触发
@@ -39,9 +47,16 @@ func (h *EventHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 		connID = app.NextConnID()
 	}
 
-	c.SetContext(&connctx.ConnContext{
-		ConnID: connID,
-	})
+	ctx := &connctx.ConnContext{
+		ConnID:         connID,
+		LastActiveTime: time.Now().Unix(),
+	}
+	c.SetContext(ctx)
+
+	if h.App != nil {
+		h.App.AllConns.Store(connID, c)
+	}
+
 	return nil, gnet.None
 }
 
@@ -51,6 +66,9 @@ func (h *EventHandler) OnTraffic(c gnet.Conn) gnet.Action {
 	if !ok || ctx == nil {
 		return gnet.Close
 	}
+
+	// 更新最后活跃时间
+	ctx.LastActiveTime = time.Now().Unix()
 
 	// 如果还没有完成 websocket 握手，则先处理 HTTP Upgrade
 	if !ctx.HandshakeDone {
@@ -66,6 +84,10 @@ func (h *EventHandler) OnClose(c gnet.Conn, err error) gnet.Action {
 	ctx, ok := c.Context().(*connctx.ConnContext)
 	if !ok || ctx == nil {
 		return gnet.None
+	}
+
+	if h.App != nil {
+		h.App.AllConns.Delete(ctx.ConnID)
 	}
 
 	// 如果连接之前已经进入房间，则在关闭时移除房间索引

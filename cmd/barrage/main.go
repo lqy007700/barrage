@@ -22,6 +22,12 @@ func main() {
 	// 启动 Kafka 消费者
 	application.StartConsumer(context.Background())
 
+	// 启动心跳检测清理僵尸连接
+	application.StartHeartbeatCheck(context.Background())
+
+	// 启动空闲房间定时回收（设置阀值为空闲180秒）
+	application.RoomManager.StartRoomCleaner(context.Background(), 180)
+
 	handler := &server.EventHandler{
 		App: application,
 	}

@@ -25,4 +25,7 @@ type ConnContext struct {
 
 	// WebSocket 数据阶段读缓冲
 	ReadBuffer []byte
+
+	// 最后一次活跃时间（Unix 秒）
+	LastActiveTime int64
 }

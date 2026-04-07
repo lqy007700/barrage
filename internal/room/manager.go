@@ -1,10 +1,12 @@
 package room
 
 import (
+	"context"
 	"hash/fnv"
 	"math/bits"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/panjf2000/gnet/v2"
 )
@@ -23,6 +25,9 @@ type Room struct {
 
 	// 本机房间总连接数
 	LocalConnCount atomic.Int64
+
+	// 房间连接数归零的最后时间 (用于延迟回收)
+	LastEmptyTime atomic.Int64
 
 	// 活跃 loop 位图
 	// 第 i 位为 1 表示该房间在 loop i 上当前至少有一个连接
@@ -161,6 +166,9 @@ func (m *Manager) AddConnInLoop(roomID int64, loopIdx int, connID string, c gnet
 		mask := uint64(1) << uint(loopIdx)
 		r.ActiveLoops.Or(mask)
 	}
+
+	// 只要有新连接进房，清除空闲标记
+	r.LastEmptyTime.Store(0)
 }
 
 // RemoveConnInLoop 将连接从指定房间和指定分片移除
@@ -199,18 +207,9 @@ func (m *Manager) RemoveConnInLoop(roomID int64, loopIdx int, connID string) {
 		r.ActiveLoops.And(mask)
 	}
 
+	// 记录退房后的空闲状态，交由异步 GC 处理
 	if r.LocalConnCount.Load() == 0 {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-
-		latest, exists := b.rooms[roomID]
-		if !exists {
-			return
-		}
-
-		if latest.LocalConnCount.Load() == 0 {
-			delete(b.rooms, roomID)
-		}
+		r.LastEmptyTime.Store(time.Now().Unix())
 	}
 }
 
@@ -283,5 +282,52 @@ func (m *Manager) RangeShardInLoop(roomID int64, loopIdx int, fn func(connID str
 	shard := r.Shards[loopIdx]
 	for connID, c := range shard {
 		fn(connID, c)
+	}
+}
+
+// StartRoomCleaner 开启后台定期清理空闲房间
+// idleSeconds: 空闲多少秒后认为可以安全销毁
+func (m *Manager) StartRoomCleaner(ctx context.Context, idleSeconds int64) {
+	go func() {
+		// 检查间隔一般为空闲阈值的一半
+		checkInterval := time.Duration(idleSeconds/2) * time.Second
+		if checkInterval < 10*time.Second {
+			checkInterval = 10 * time.Second
+		}
+
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now().Unix()
+				// 遍历分桶进行锁清理
+				for i := 0; i < m.bucketNum; i++ {
+					m.cleanBucket(i, now, idleSeconds)
+				}
+			}
+		}
+	}()
+}
+
+// cleanBucket 清理具体的分桶
+func (m *Manager) cleanBucket(idx int, now int64, idleSeconds int64) {
+	b := m.buckets[idx]
+	
+	// 在清理时必须要拿到桶的写锁
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for roomID, r := range b.rooms {
+		// 如果当前连接数为0，并且空闲时间超过阈值，则淘汰
+		if r.LocalConnCount.Load() == 0 {
+			emptyTime := r.LastEmptyTime.Load()
+			if emptyTime > 0 && now-emptyTime > idleSeconds {
+				delete(b.rooms, roomID)
+			}
+		}
 	}
 }

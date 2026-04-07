@@ -37,6 +37,8 @@ const (
 	OpType_OP_BROADCAST OpType = 4
 	// 服务端返回错误
 	OpType_OP_ERROR OpType = 5
+	// 系统消息 / 公告
+	OpType_OP_SYSTEM OpType = 6
 )
 
 // Enum value maps for OpType.
@@ -48,6 +50,7 @@ var (
 		3: "OP_HEARTBEAT",
 		4: "OP_BROADCAST",
 		5: "OP_ERROR",
+		6: "OP_SYSTEM",
 	}
 	OpType_value = map[string]int32{
 		"OP_UNKNOWN":   0,
@@ -56,6 +59,7 @@ var (
 		"OP_HEARTBEAT": 3,
 		"OP_BROADCAST": 4,
 		"OP_ERROR":     5,
+		"OP_SYSTEM":    6,
 	}
 )
 
@@ -86,6 +90,61 @@ func (OpType) EnumDescriptor() ([]byte, []int) {
 	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{0}
 }
 
+// 系统下发的公告或事件通知
+type SystemMsg struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 消息内容
+	Content string `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	// 消息类型（如 1: 公告，2: 房间通知，3: 系统事件等）
+	Type          int32 `protobuf:"varint,2,opt,name=type,proto3" json:"type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SystemMsg) Reset() {
+	*x = SystemMsg{}
+	mi := &file_internal_pb_barrage_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SystemMsg) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SystemMsg) ProtoMessage() {}
+
+func (x *SystemMsg) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_pb_barrage_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SystemMsg.ProtoReflect.Descriptor instead.
+func (*SystemMsg) Descriptor() ([]byte, []int) {
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *SystemMsg) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *SystemMsg) GetType() int32 {
+	if x != nil {
+		return x.Type
+	}
+	return 0
+}
+
 // 服务端下发的错误消息
 type ErrorMsg struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -99,7 +158,7 @@ type ErrorMsg struct {
 
 func (x *ErrorMsg) Reset() {
 	*x = ErrorMsg{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[0]
+	mi := &file_internal_pb_barrage_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -111,7 +170,7 @@ func (x *ErrorMsg) String() string {
 func (*ErrorMsg) ProtoMessage() {}
 
 func (x *ErrorMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[0]
+	mi := &file_internal_pb_barrage_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -124,7 +183,7 @@ func (x *ErrorMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ErrorMsg.ProtoReflect.Descriptor instead.
 func (*ErrorMsg) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{0}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ErrorMsg) GetCode() int32 {
@@ -160,7 +219,7 @@ type Frame struct {
 
 func (x *Frame) Reset() {
 	*x = Frame{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[1]
+	mi := &file_internal_pb_barrage_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -172,7 +231,7 @@ func (x *Frame) String() string {
 func (*Frame) ProtoMessage() {}
 
 func (x *Frame) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[1]
+	mi := &file_internal_pb_barrage_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -185,7 +244,7 @@ func (x *Frame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Frame.ProtoReflect.Descriptor instead.
 func (*Frame) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{1}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Frame) GetOp() OpType {
@@ -231,14 +290,16 @@ type JoinRoomReq struct {
 	// 用户 ID
 	UserId int64 `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	// 是否为付费用户
-	IsPremium     bool `protobuf:"varint,3,opt,name=is_premium,json=isPremium,proto3" json:"is_premium,omitempty"`
+	IsPremium bool `protobuf:"varint,3,opt,name=is_premium,json=isPremium,proto3" json:"is_premium,omitempty"`
+	// 鉴权 token
+	Token         string `protobuf:"bytes,4,opt,name=token,proto3" json:"token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *JoinRoomReq) Reset() {
 	*x = JoinRoomReq{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[2]
+	mi := &file_internal_pb_barrage_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -250,7 +311,7 @@ func (x *JoinRoomReq) String() string {
 func (*JoinRoomReq) ProtoMessage() {}
 
 func (x *JoinRoomReq) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[2]
+	mi := &file_internal_pb_barrage_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -263,7 +324,7 @@ func (x *JoinRoomReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinRoomReq.ProtoReflect.Descriptor instead.
 func (*JoinRoomReq) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{2}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *JoinRoomReq) GetRoomId() int64 {
@@ -287,6 +348,13 @@ func (x *JoinRoomReq) GetIsPremium() bool {
 	return false
 }
 
+func (x *JoinRoomReq) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
 // 聊天消息体
 type ChatMsg struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -298,7 +366,7 @@ type ChatMsg struct {
 
 func (x *ChatMsg) Reset() {
 	*x = ChatMsg{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[3]
+	mi := &file_internal_pb_barrage_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -310,7 +378,7 @@ func (x *ChatMsg) String() string {
 func (*ChatMsg) ProtoMessage() {}
 
 func (x *ChatMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[3]
+	mi := &file_internal_pb_barrage_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -323,7 +391,7 @@ func (x *ChatMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatMsg.ProtoReflect.Descriptor instead.
 func (*ChatMsg) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{3}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ChatMsg) GetContent() string {
@@ -350,7 +418,7 @@ type BroadcastMsg struct {
 
 func (x *BroadcastMsg) Reset() {
 	*x = BroadcastMsg{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[4]
+	mi := &file_internal_pb_barrage_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -362,7 +430,7 @@ func (x *BroadcastMsg) String() string {
 func (*BroadcastMsg) ProtoMessage() {}
 
 func (x *BroadcastMsg) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[4]
+	mi := &file_internal_pb_barrage_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -375,7 +443,7 @@ func (x *BroadcastMsg) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastMsg.ProtoReflect.Descriptor instead.
 func (*BroadcastMsg) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{4}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *BroadcastMsg) GetRoomId() int64 {
@@ -427,7 +495,7 @@ type BroadcastEnvelope struct {
 
 func (x *BroadcastEnvelope) Reset() {
 	*x = BroadcastEnvelope{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[5]
+	mi := &file_internal_pb_barrage_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -439,7 +507,7 @@ func (x *BroadcastEnvelope) String() string {
 func (*BroadcastEnvelope) ProtoMessage() {}
 
 func (x *BroadcastEnvelope) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[5]
+	mi := &file_internal_pb_barrage_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -452,7 +520,7 @@ func (x *BroadcastEnvelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastEnvelope.ProtoReflect.Descriptor instead.
 func (*BroadcastEnvelope) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{5}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *BroadcastEnvelope) GetRoomId() int64 {
@@ -508,7 +576,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_internal_pb_barrage_proto_msgTypes[6]
+	mi := &file_internal_pb_barrage_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -520,7 +588,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_pb_barrage_proto_msgTypes[6]
+	mi := &file_internal_pb_barrage_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -533,7 +601,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{6}
+	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Heartbeat) GetClientTs() int64 {
@@ -547,7 +615,10 @@ var File_internal_pb_barrage_proto protoreflect.FileDescriptor
 
 const file_internal_pb_barrage_proto_rawDesc = "" +
 	"\n" +
-	"\x19internal/pb/barrage.proto\x12\abarrage\"8\n" +
+	"\x19internal/pb/barrage.proto\x12\abarrage\"9\n" +
+	"\tSystemMsg\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\x05R\x04type\"8\n" +
 	"\bErrorMsg\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x92\x01\n" +
@@ -556,12 +627,13 @@ const file_internal_pb_barrage_proto_rawDesc = "" +
 	"\aroom_id\x18\x02 \x01(\x03R\x06roomId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\x03R\x06userId\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12\x1c\n" +
-	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"^\n" +
+	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"t\n" +
 	"\vJoinRoomReq\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\x03R\x06roomId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x1d\n" +
 	"\n" +
-	"is_premium\x18\x03 \x01(\bR\tisPremium\"#\n" +
+	"is_premium\x18\x03 \x01(\bR\tisPremium\x12\x14\n" +
+	"\x05token\x18\x04 \x01(\tR\x05token\"#\n" +
 	"\aChatMsg\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\"r\n" +
 	"\fBroadcastMsg\x12\x17\n" +
@@ -578,7 +650,7 @@ const file_internal_pb_barrage_proto_rawDesc = "" +
 	"\apayload\x18\x05 \x01(\fR\apayload\x12\x1c\n" +
 	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\"(\n" +
 	"\tHeartbeat\x12\x1b\n" +
-	"\tclient_ts\x18\x01 \x01(\x03R\bclientTs*i\n" +
+	"\tclient_ts\x18\x01 \x01(\x03R\bclientTs*x\n" +
 	"\x06OpType\x12\x0e\n" +
 	"\n" +
 	"OP_UNKNOWN\x10\x00\x12\x10\n" +
@@ -586,7 +658,8 @@ const file_internal_pb_barrage_proto_rawDesc = "" +
 	"\aOP_CHAT\x10\x02\x12\x10\n" +
 	"\fOP_HEARTBEAT\x10\x03\x12\x10\n" +
 	"\fOP_BROADCAST\x10\x04\x12\f\n" +
-	"\bOP_ERROR\x10\x05B\x15Z\x13barrage/internal/pbb\x06proto3"
+	"\bOP_ERROR\x10\x05\x12\r\n" +
+	"\tOP_SYSTEM\x10\x06B\x15Z\x13barrage/internal/pbb\x06proto3"
 
 var (
 	file_internal_pb_barrage_proto_rawDescOnce sync.Once
@@ -601,16 +674,17 @@ func file_internal_pb_barrage_proto_rawDescGZIP() []byte {
 }
 
 var file_internal_pb_barrage_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_internal_pb_barrage_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_internal_pb_barrage_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_internal_pb_barrage_proto_goTypes = []any{
 	(OpType)(0),               // 0: barrage.OpType
-	(*ErrorMsg)(nil),          // 1: barrage.ErrorMsg
-	(*Frame)(nil),             // 2: barrage.Frame
-	(*JoinRoomReq)(nil),       // 3: barrage.JoinRoomReq
-	(*ChatMsg)(nil),           // 4: barrage.ChatMsg
-	(*BroadcastMsg)(nil),      // 5: barrage.BroadcastMsg
-	(*BroadcastEnvelope)(nil), // 6: barrage.BroadcastEnvelope
-	(*Heartbeat)(nil),         // 7: barrage.Heartbeat
+	(*SystemMsg)(nil),         // 1: barrage.SystemMsg
+	(*ErrorMsg)(nil),          // 2: barrage.ErrorMsg
+	(*Frame)(nil),             // 3: barrage.Frame
+	(*JoinRoomReq)(nil),       // 4: barrage.JoinRoomReq
+	(*ChatMsg)(nil),           // 5: barrage.ChatMsg
+	(*BroadcastMsg)(nil),      // 6: barrage.BroadcastMsg
+	(*BroadcastEnvelope)(nil), // 7: barrage.BroadcastEnvelope
+	(*Heartbeat)(nil),         // 8: barrage.Heartbeat
 }
 var file_internal_pb_barrage_proto_depIdxs = []int32{
 	0, // 0: barrage.Frame.op:type_name -> barrage.OpType
@@ -632,7 +706,7 @@ func file_internal_pb_barrage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_pb_barrage_proto_rawDesc), len(file_internal_pb_barrage_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

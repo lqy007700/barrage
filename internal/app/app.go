@@ -3,6 +3,7 @@ package app
 import (
 	"barrage/internal/broadcast"
 	"barrage/internal/config"
+	"barrage/internal/connctx"
 	"barrage/internal/dispatcher"
 	"barrage/internal/filter"
 	"barrage/internal/mq"
@@ -13,6 +14,7 @@ import (
 	"context"
 	"log"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -53,6 +55,9 @@ type App struct {
 
 	// Kafka 消费者
 	Consumer *mq.Consumer
+
+	// 全局连接表，用于心跳检测等
+	AllConns sync.Map
 }
 
 // New 创建应用对象
@@ -138,6 +143,42 @@ func (a *App) StartConsumer(ctx context.Context) {
 	go a.Consumer.Start(ctx)
 }
 
+// StartHeartbeatCheck 启动定时清理僵尸连接
+func (a *App) StartHeartbeatCheck(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				now := time.Now().Unix()
+				// 遍历所有连接
+				a.AllConns.Range(func(key, value interface{}) bool {
+					conn, ok := value.(gnet.Conn)
+					if !ok {
+						return true
+					}
+
+					cCtx, ok := conn.Context().(*connctx.ConnContext)
+					if !ok {
+						return true
+					}
+
+					// 如果超过 90 秒未活跃，则视为僵尸连接关闭
+					if now-cCtx.LastActiveTime > 90 {
+						log.Printf("连接心跳超时断开: connID=%s userID=%d", cCtx.ConnID, cCtx.UserID)
+						conn.Close()
+					}
+					return true
+				})
+			}
+		}
+	}()
+}
+
 // HandleMQBroadcast 处理 Kafka 广播消息
 func (a *App) HandleMQBroadcast(msg *mq.BroadcastEnvelope) error {
 	if a == nil || a.Broadcaster == nil || msg == nil {
@@ -187,6 +228,24 @@ func (a *App) handleJoinRoom(task *dispatcher.InboundTask, frame *pb.Frame) {
 		return
 	}
 
+	// 1. token 校验 (简单模拟)
+	if req.Token == "" || req.Token == "invalid_token" {
+		a.sendError(task, 401, "鉴权失败: 无效的 token")
+		return
+	}
+
+	// 2. 封禁用户校验 (假设 4444 被封禁)
+	if req.UserId <= 0 || req.UserId == 4444 {
+		a.sendError(task, 403, "准入失败: 该用户已被封禁")
+		return
+	}
+
+	// 3. 房间准入校验 (必须大于 0)
+	if req.RoomId <= 0 {
+		a.sendError(task, 404, "准入失败: 房间不存在或已关闭")
+		return
+	}
+
 	task.Ctx.UserID = req.UserId
 	task.Ctx.RoomID = req.RoomId
 	task.Ctx.IsPremium = req.IsPremium
@@ -228,29 +287,7 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 			)
 
 			// 构造错误消息下发给发送者
-			errorMsg := &pb.ErrorMsg{
-				Code:    400,
-				Message: "消息包含敏感词，发送失败",
-			}
-			errPayload, _ := proto.Marshal(errorMsg)
-
-			errorFrame := &pb.Frame{
-				Op:        pb.OpType_OP_ERROR,
-				RoomId:    task.Ctx.RoomID,
-				UserId:    task.Ctx.UserID,
-				Payload:   errPayload,
-				Timestamp: time.Now().UnixMilli(),
-			}
-
-			frameData, _ := proto.Marshal(errorFrame)
-			
-			// 通过 AsyncWrite 回写给对应的 websocket 连接
-			task.Conn.AsyncWrite(ws.BuildBinaryFrame(frameData), func(c gnet.Conn, err error) error {
-				if err != nil {
-					log.Printf("下发敏感词拦截提示失败: connID=%s err=%v", task.Ctx.ConnID, err)
-				}
-				return nil
-			})
+			a.sendError(task, 400, "消息包含敏感词，发送失败")
 			return
 		}
 	}
@@ -350,3 +387,192 @@ func (a *App) ResolveLoopIdx(c gnet.Conn) int {
 
 	return loopIdx
 }
+
+// sendError 辅助方法：向客户端发送错误消息
+func (a *App) sendError(task *dispatcher.InboundTask, code int32, message string) {
+	errorMsg := &pb.ErrorMsg{
+		Code:    code,
+		Message: message,
+	}
+	errPayload, _ := proto.Marshal(errorMsg)
+
+	errorFrame := &pb.Frame{
+		Op:        pb.OpType_OP_ERROR,
+		RoomId:    task.Ctx.RoomID,
+		UserId:    task.Ctx.UserID,
+		Payload:   errPayload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	frameData, _ := proto.Marshal(errorFrame)
+
+	task.Conn.AsyncWrite(ws.BuildBinaryFrame(frameData), func(c gnet.Conn, err error) error {
+		if err != nil {
+			log.Printf("下发错误提示失败: connID=%s err=%v", task.Ctx.ConnID, err)
+		}
+		return nil
+	})
+}
+
+// KickConn 主动断开指定连接
+func (a *App) KickConn(connID string, reason string) {
+	value, ok := a.AllConns.Load(connID)
+	if !ok {
+		return
+	}
+
+	conn, ok := value.(gnet.Conn)
+	if !ok {
+		return
+	}
+
+	cCtx, ok := conn.Context().(*connctx.ConnContext)
+	if !ok {
+		return
+	}
+
+	_ = a.LoopDispatcher.Dispatch(cCtx.LoopIdx, func() {
+		errorMsg := &pb.ErrorMsg{
+			Code:    403,
+			Message: reason,
+		}
+		errPayload, _ := proto.Marshal(errorMsg)
+
+		errorFrame := &pb.Frame{
+			Op:        pb.OpType_OP_ERROR,
+			RoomId:    cCtx.RoomID,
+			UserId:    cCtx.UserID,
+			Payload:   errPayload,
+			Timestamp: time.Now().UnixMilli(),
+		}
+
+		frameData, _ := proto.Marshal(errorFrame)
+
+		// 派发到对应 loop 内部，发送提示帧后回调执行关闭
+		_ = conn.AsyncWrite(ws.BuildBinaryFrame(frameData), func(c gnet.Conn, err error) error {
+			log.Printf("主动踢出连接: connID=%s userID=%d reason=%s", cCtx.ConnID, cCtx.UserID, reason)
+			return c.Close()
+		})
+	})
+}
+
+// KickUser 断开指定 userID 的所有连接
+func (a *App) KickUser(userID int64, reason string) {
+	if userID <= 0 {
+		return
+	}
+
+	// 遍历查找对应 userID
+	a.AllConns.Range(func(key, value interface{}) bool {
+		conn, ok := value.(gnet.Conn)
+		if !ok {
+			return true
+		}
+
+		cCtx, ok := conn.Context().(*connctx.ConnContext)
+		if !ok || cCtx.UserID != userID {
+			return true
+		}
+
+		// 复用 KickConn 的逻辑
+		a.KickConn(cCtx.ConnID, reason)
+		return true
+	})
+}
+
+// BroadcastSystemMsg 主动向指定房间下发系统消息（如：房间通知、管理消息）
+func (a *App) BroadcastSystemMsg(roomID int64, content string, msgType int32) {
+	if roomID <= 0 {
+		return
+	}
+
+	sysMsg := &pb.SystemMsg{
+		Content: content,
+		Type:    msgType,
+	}
+	payload, _ := proto.Marshal(sysMsg)
+
+	outFrame := &pb.Frame{
+		Op:        pb.OpType_OP_SYSTEM,
+		RoomId:    roomID,
+		UserId:    0, // 0 表示系统发出
+		Payload:   payload,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	data, _ := proto.Marshal(outFrame)
+
+	envelope := &mq.BroadcastEnvelope{
+		RoomId:       roomID,
+		UserId:       0,
+		SenderConnId: "SYSTEM",
+		IsPremium:    true,
+		Payload:      data,
+		Timestamp:    time.Now().UnixMilli(),
+	}
+
+	// 优先写入 Kafka（依靠各节点消费回来实现多机触达）
+	if a.Producer != nil {
+		if err := a.Producer.Publish(envelope); err != nil {
+			log.Printf("系统消息发送 Kafka 失败: roomID=%d err=%v", roomID, err)
+		}
+		return
+	}
+
+	// 退化到单机广播
+	if a.RoomManager.HasLocalRoom(roomID) && a.Broadcaster != nil {
+		_ = a.Broadcaster.BroadcastLocal(envelope)
+	}
+}
+
+// BroadcastGlobalSystemMsg 全局广播系统消息（系统公告）
+// 直接作用于该节点下的所有连接，下发全局的系统公告。
+func (a *App) BroadcastGlobalSystemMsg(content string, msgType int32) {
+	sysMsg := &pb.SystemMsg{
+		Content: content,
+		Type:    msgType,
+	}
+	payload, _ := proto.Marshal(sysMsg)
+
+	a.AllConns.Range(func(key, value interface{}) bool {
+		conn, ok := value.(gnet.Conn)
+		if !ok {
+			return true
+		}
+
+		cCtx, ok := conn.Context().(*connctx.ConnContext)
+		if !ok {
+			return true
+		}
+
+		// 分发到对应 Loop 线程执行发送
+		_ = a.LoopDispatcher.Dispatch(cCtx.LoopIdx, func() {
+			outFrame := &pb.Frame{
+				Op:        pb.OpType_OP_SYSTEM,
+				RoomId:    cCtx.RoomID,
+				UserId:    0,
+				Payload:   payload,
+				Timestamp: time.Now().UnixMilli(),
+			}
+
+			frameData, _ := proto.Marshal(outFrame)
+		_ = conn.AsyncWrite(ws.BuildBinaryFrame(frameData), nil)
+		})
+		return true
+	})
+}
+
+// Close 释放服务资源，主要用于优雅停机
+func (a *App) Close() {
+	log.Println("执行 App 资源释放和停机清理...")
+	if a.Producer != nil {
+		_ = a.Producer.Close()
+		log.Println("Kafka Producer 已关闭")
+	}
+	if a.Consumer != nil {
+		_ = a.Consumer.Close()
+		log.Println("Kafka Consumer 已关闭")
+	}
+}
+
+
