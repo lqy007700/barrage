@@ -98,7 +98,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	a.TextFilter = reloadableFilter
 
-	a.Broadcaster = broadcast.New(roomManager, a.LoopDispatcher)
+	a.Broadcaster = broadcast.New(roomManager, a.LoopDispatcher, 50*time.Millisecond)
 
 	// 只有显式启用 Kafka 时才初始化
 	if cfg.EnableKafka && len(cfg.KafkaBrokers) > 0 && cfg.KafkaTopic != "" {
