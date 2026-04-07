@@ -21,6 +21,18 @@ enum OpType {
 
   // 服务端广播消息
   OP_BROADCAST = 4;
+
+  // 服务端返回错误
+  OP_ERROR = 5;
+}
+
+// 服务端下发的错误消息
+message ErrorMsg {
+  // 错误码
+  int32 code = 1;
+
+  // 错误信息描述
+  string message = 2;
 }
 
 // WebSocket 二进制帧中的统一外层协议

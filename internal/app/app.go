@@ -7,6 +7,7 @@ import (
 	"barrage/internal/filter"
 	"barrage/internal/mq"
 	"barrage/internal/pb"
+	"barrage/internal/protocol/ws"
 	"barrage/internal/room"
 	"barrage/internal/worker"
 	"context"
@@ -225,6 +226,31 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 				task.Ctx.ConnID,
 				filterResult.Words,
 			)
+
+			// 构造错误消息下发给发送者
+			errorMsg := &pb.ErrorMsg{
+				Code:    400,
+				Message: "消息包含敏感词，发送失败",
+			}
+			errPayload, _ := proto.Marshal(errorMsg)
+
+			errorFrame := &pb.Frame{
+				Op:        pb.OpType_OP_ERROR,
+				RoomId:    task.Ctx.RoomID,
+				UserId:    task.Ctx.UserID,
+				Payload:   errPayload,
+				Timestamp: time.Now().UnixMilli(),
+			}
+
+			frameData, _ := proto.Marshal(errorFrame)
+			
+			// 通过 AsyncWrite 回写给对应的 websocket 连接
+			task.Conn.AsyncWrite(ws.BuildBinaryFrame(frameData), func(c gnet.Conn, err error) error {
+				if err != nil {
+					log.Printf("下发敏感词拦截提示失败: connID=%s err=%v", task.Ctx.ConnID, err)
+				}
+				return nil
+			})
 			return
 		}
 	}
