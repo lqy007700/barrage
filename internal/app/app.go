@@ -6,6 +6,7 @@ import (
 	"barrage/internal/connctx"
 	"barrage/internal/dispatcher"
 	"barrage/internal/filter"
+	"barrage/internal/metrics"
 	"barrage/internal/mq"
 	"barrage/internal/pb"
 	"barrage/internal/protocol/ws"
@@ -168,7 +169,7 @@ func (a *App) StartHeartbeatCheck(ctx context.Context) {
 					}
 
 					// 如果超过 90 秒未活跃，则视为僵尸连接关闭
-					if now-cCtx.LastActiveTime > 90 {
+					if now-cCtx.LastActiveTime.Load() > 90 {
 						log.Printf("连接心跳超时断开: connID=%s userID=%d", cCtx.ConnID, cCtx.UserID)
 						conn.Close()
 					}
@@ -195,7 +196,8 @@ func (a *App) HandleMQBroadcast(msg *mq.BroadcastEnvelope) error {
 
 // HandleInbound 处理入站消息
 func (a *App) HandleInbound(task *dispatcher.InboundTask) {
-	if task == nil || task.Conn == nil || task.Ctx == nil || len(task.Data) == 0 {
+	// 二层防护：防御来自底层代理或非 WS 协议引发的超大包体，限制单包解析至高在 64KB 内
+	if task == nil || task.Conn == nil || task.Ctx == nil || len(task.Data) == 0 || len(task.Data) > 64*1024 {
 		return
 	}
 
@@ -279,6 +281,7 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	if a.TextFilter != nil {
 		filterResult := a.TextFilter.Check(msg.Content)
 		if filterResult.Hit {
+			metrics.FilterRejectCount.Add(1)
 			log.Printf("消息因敏感词被驳回: roomID=%d userID=%d connID=%s words=%v",
 				task.Ctx.RoomID,
 				task.Ctx.UserID,
@@ -319,6 +322,7 @@ func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	// 这样各机器都可以通过各自独立 GroupID 消费后广播本机连接
 	if a.Producer != nil {
 		if err := a.Producer.Publish(envelope); err != nil {
+			metrics.KafkaPublishErrCount.Add(1)
 			log.Printf("发送 Kafka 消息失败: roomID=%d userID=%d err=%v",
 				envelope.RoomId,
 				envelope.UserId,
@@ -514,6 +518,7 @@ func (a *App) BroadcastSystemMsg(roomID int64, content string, msgType int32) {
 	// 优先写入 Kafka（依靠各节点消费回来实现多机触达）
 	if a.Producer != nil {
 		if err := a.Producer.Publish(envelope); err != nil {
+			metrics.KafkaPublishErrCount.Add(1)
 			log.Printf("系统消息发送 Kafka 失败: roomID=%d err=%v", roomID, err)
 		}
 		return

@@ -5,6 +5,8 @@ import (
 	"log"
 	"time"
 
+	"barrage/internal/metrics"
+
 	"github.com/segmentio/kafka-go"
 )
 
@@ -45,6 +47,7 @@ func (c *Consumer) Start(ctx context.Context) {
 				return
 			}
 
+			metrics.KafkaConsumeErrCount.Add(1)
 			log.Printf("读取 Kafka 消息失败，将在 1 秒后重连重试: %v", err)
 			time.Sleep(time.Second)
 			continue

@@ -28,6 +28,23 @@ var (
 
 	// ErrNotWebSocket 表示不是合法 websocket 握手请求
 	ErrNotWebSocket = errors.New("not websocket handshake request")
+
+	// ErrFragmentNotSupported 明确表示不支持数据帧分片
+	ErrFragmentNotSupported = errors.New("fragmented frame is not supported")
+
+	// ErrControlFrameInvalid 表示非法的控制帧
+	ErrControlFrameInvalid = errors.New("invalid control frame")
+
+	// ErrRSVNotZero 表示 RSV 保留位不符合规范（未经扩展支持）
+	ErrRSVNotZero = errors.New("RSV bits must be 0")
+
+	// ErrPayloadTooLarge 表示消息体积过大
+	ErrPayloadTooLarge = errors.New("websocket payload too large")
+)
+
+const (
+	// MaxWebSocketPayloadSize 允许的最大单帧数据载荷，设定为 64KB 防止大包攻击
+	MaxWebSocketPayloadSize = 64 * 1024
 )
 
 // BuildWebSocketHandshakeResponse 构造 websocket 握手响应
@@ -128,16 +145,39 @@ func decodeOneFrame(data []byte) (WebSocketFrame, int, error) {
 	b1 := data[1]
 
 	fin := (b0 & 0x80) != 0
+	rsv1 := (b0 & 0x40) != 0
+	rsv2 := (b0 & 0x20) != 0
+	rsv3 := (b0 & 0x10) != 0
 	opcode := b0 & 0x0F
 	masked := (b1 & 0x80) != 0
 	payloadLen := int(b1 & 0x7F)
 
-	// 当前简单框架先要求客户端发送完整帧，不处理分片帧
-	if !fin {
+	// 严格 header 校验：未协商扩展的情况下 RSV 必须为 0
+	if rsv1 || rsv2 || rsv3 {
+		return WebSocketFrame{}, 0, ErrRSVNotZero
+	}
+
+	// 控制帧要求：不能被分片（FIN 必须为1），并且有效载荷 <= 125 字节
+	if opcode >= 0x08 {
+		if !fin {
+			return WebSocketFrame{}, 0, ErrControlFrameInvalid
+		}
+		if payloadLen > 125 {
+			return WebSocketFrame{}, 0, ErrControlFrameInvalid
+		}
+	}
+
+	// 数据帧分片支持策略：当前框架设计为单帧全透传直发，显式拒绝 Continuation Frame（分拆包）
+	if !fin || opcode == 0x00 {
+		return WebSocketFrame{}, 0, ErrFragmentNotSupported
+	}
+
+	// 检查业务范围之外的其它保留/异常 Opcode
+	if opcode != 0x1 && opcode != 0x2 && opcode != 0x8 && opcode != 0x9 && opcode != 0xA {
 		return WebSocketFrame{}, 0, ErrInvalidFrame
 	}
 
-	// 客户端发给服务端的帧必须带 mask
+	// 客户端发给服务端的帧必须带 mask 掩码
 	if !masked {
 		return WebSocketFrame{}, 0, ErrInvalidFrame
 	}
@@ -161,6 +201,11 @@ func decodeOneFrame(data []byte) (WebSocketFrame, int, error) {
 		}
 		payloadLen = int(v)
 		offset += 8
+	}
+
+	// 拦截超大非法请求保护服务器内存，防止恶意攻击
+	if payloadLen > MaxWebSocketPayloadSize {
+		return WebSocketFrame{}, 0, ErrPayloadTooLarge
 	}
 
 	if len(data) < offset+4 {

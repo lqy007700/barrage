@@ -17,6 +17,7 @@ func NewPool(size int) (*Pool, error) {
 	p, err := ants.NewPool(
 		size,
 		ants.WithPreAlloc(true),
+		ants.WithNonblocking(true), // 开启非阻塞模式！如果满载直接打回，坚决不阻塞外部的网关 Event-Loop！
 	)
 	if err != nil {
 		return nil, err

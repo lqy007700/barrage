@@ -1,5 +1,7 @@
 package connctx
 
+import "sync/atomic"
+
 // ConnContext 用于保存连接级别的上下文信息
 type ConnContext struct {
 	// 连接唯一标识
@@ -27,5 +29,5 @@ type ConnContext struct {
 	ReadBuffer []byte
 
 	// 最后一次活跃时间（Unix 秒）
-	LastActiveTime int64
+	LastActiveTime atomic.Int64
 }

@@ -6,6 +6,7 @@ import (
 	"barrage/internal/dispatcher"
 	"barrage/internal/protocol/ws"
 	"bytes"
+	"encoding/binary"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -49,8 +50,8 @@ func (h *EventHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
 
 	ctx := &connctx.ConnContext{
 		ConnID:         connID,
-		LastActiveTime: time.Now().Unix(),
 	}
+	ctx.LastActiveTime.Store(time.Now().Unix())
 	c.SetContext(ctx)
 
 	if h.App != nil {
@@ -68,7 +69,7 @@ func (h *EventHandler) OnTraffic(c gnet.Conn) gnet.Action {
 	}
 
 	// 更新最后活跃时间
-	ctx.LastActiveTime = time.Now().Unix()
+	ctx.LastActiveTime.Store(time.Now().Unix())
 
 	// 如果还没有完成 websocket 握手，则先处理 HTTP Upgrade
 	if !ctx.HandshakeDone {
@@ -108,6 +109,11 @@ func (h *EventHandler) handleHandshake(c gnet.Conn, ctx *connctx.ConnContext) gn
 
 	ctx.HandshakeBuffer = append(ctx.HandshakeBuffer, data...)
 
+	// 安全防御：防止恶意客户端建立连接后不断以慢速发送字节但不补全 \r\n\r\n 凑算 OOM
+	if len(ctx.HandshakeBuffer) > 4096 {
+		return gnet.Close
+	}
+
 	// HTTP 请求头必须以 \r\n\r\n 结束
 	if !bytes.Contains(ctx.HandshakeBuffer, []byte("\r\n\r\n")) {
 		return gnet.None
@@ -135,6 +141,11 @@ func (h *EventHandler) handleWebSocketTraffic(c gnet.Conn, ctx *connctx.ConnCont
 	// 追加到连接级读缓冲，用于处理半包和粘包
 	ctx.ReadBuffer = append(ctx.ReadBuffer, data...)
 
+	// 安全防御：限定单次待解包的字节池绝对不超过界限，防御恶意攻击发送的未闭合超巨量半包或死循环空载包
+	if len(ctx.ReadBuffer) > 130*1024 {
+		return gnet.Close
+	}
+
 	frames, consumed, err := DecodeWebSocketFrames(ctx.ReadBuffer)
 	if err != nil {
 		return gnet.Close
@@ -152,7 +163,15 @@ func (h *EventHandler) handleWebSocketTraffic(c gnet.Conn, ctx *connctx.ConnCont
 			_ = c.AsyncWrite(BuildPongFrame(frame.Payload), nil)
 
 		case ws.OpClose:
-			_ = c.AsyncWrite(BuildCloseFrame(nil), nil)
+			var closeCode uint16 = 1000 // Normal Closure 默认标准关闭码
+			if len(frame.Payload) >= 2 {
+				closeCode = binary.BigEndian.Uint16(frame.Payload[:2])
+			}
+
+			// 依规范应向发起者原样回写该状态码或附带确认的 Close 载荷
+			respPayload := make([]byte, 2)
+			binary.BigEndian.PutUint16(respPayload, closeCode)
+			_ = c.AsyncWrite(BuildCloseFrame(respPayload), nil)
 			return gnet.Close
 
 		case ws.OpBinary:
@@ -160,12 +179,10 @@ func (h *EventHandler) handleWebSocketTraffic(c gnet.Conn, ctx *connctx.ConnCont
 				continue
 			}
 
-			payload := append([]byte(nil), frame.Payload...)
-
 			task := &dispatcher.InboundTask{
 				Conn: c,
 				Ctx:  ctx,
-				Data: payload,
+				Data: frame.Payload,
 			}
 
 			err = h.App.WorkerPool.Submit(func() {
