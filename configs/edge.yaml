@@ -1,0 +1,36 @@
+server:
+  node_id: "edge-01"
+  http_addr: "0.0.0.0"
+  http_port: 8081
+  ws_addr: "0.0.0.0:8080"
+
+kafka:
+  brokers:
+    - "localhost:9092"
+  topic: "barrage-danmaku"
+  group_id_prefix: "edge"
+
+# 视频同步配置
+video_sync:
+  delay_ms: 3000          # 视频延迟 3秒
+  sync_interval_ms: 50    # 同步检查间隔 50ms
+  max_buffer_per_session: 200  # 单用户最大缓冲数
+
+# 广播配置
+broadcast:
+  batch_interval_ms: 50    # Micro-batching 间隔
+  max_pending_per_room: 1000  # 每房间最大pending队列
+  max_envelopes_per_batch: 15  # 每批次最大消息数
+
+# 慢连接降级配置
+slow_conn:
+  force_close_bytes: 4194304    # 4MB 强制断开
+  vip_skip_bytes: 1572864       # 1.5MB VIP跳过
+  skip_bytes: 524288            # 512KB 普通跳过
+  sample_skip_bytes: 262144      # 256KB 抽样跳过
+
+# 注册中心
+registry:
+  enabled: false
+  addr: "localhost:8500"  # Consul地址
+  interval_sec: 10        # 注册间隔
