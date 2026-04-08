@@ -24,6 +24,12 @@ type Broadcaster struct {
 	batchMu       sync.Mutex
 	pending       map[int64][]*mq.BroadcastEnvelope
 	batchInterval time.Duration
+
+	// 每房间 pending 队列最大长度，防止 OOM
+	maxPendingPerRoom int
+
+	// 优雅关闭信号
+	stopCh chan struct{}
 }
 
 type LoopExecutor interface {
@@ -32,16 +38,22 @@ type LoopExecutor interface {
 
 // New 创建广播器
 // batchInterval: 如果大于 0 则启用 Micro-batching 异步合并微批发送，如果等于 0 则退化为同步即时逐帧发送。
-func New(rooms *room.Manager, loopExec LoopExecutor, batchInterval time.Duration) *Broadcaster {
+// maxPendingPerRoom: 每房间 pending 队列最大长度，防止高流量时 OOM，默认 1000
+func New(rooms *room.Manager, loopExec LoopExecutor, batchInterval time.Duration, maxPendingPerRoom int) *Broadcaster {
 	if loopExec == nil {
 		panic("请指定 loop 分发任务函数")
 	}
+	if maxPendingPerRoom <= 0 {
+		maxPendingPerRoom = 1000
+	}
 
 	b := &Broadcaster{
-		Rooms:         rooms,
-		LoopExec:      loopExec,
-		pending:       make(map[int64][]*mq.BroadcastEnvelope),
-		batchInterval: batchInterval,
+		Rooms:             rooms,
+		LoopExec:          loopExec,
+		pending:           make(map[int64][]*mq.BroadcastEnvelope),
+		batchInterval:     batchInterval,
+		maxPendingPerRoom: maxPendingPerRoom,
+		stopCh:            make(chan struct{}),
 	}
 
 	// 启用后台轮询微批积压打包
@@ -57,21 +69,79 @@ func (b *Broadcaster) startBatchTicker() {
 	ticker := time.NewTicker(b.batchInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		b.batchMu.Lock()
-		flushMap := b.pending
-		// 指针交换快速清空
-		b.pending = make(map[int64][]*mq.BroadcastEnvelope)
-		b.batchMu.Unlock()
+	for {
+		select {
+		case <-b.stopCh:
+			// 优雅关闭：处理完剩余消息再退出
+			b.batchMu.Lock()
+			flushMap := b.pending
+			b.pending = make(map[int64][]*mq.BroadcastEnvelope)
+			b.batchMu.Unlock()
+			for roomID, envelopes := range flushMap {
+				b.dispatchBatch(roomID, envelopes)
+			}
+			log.Printf("Broadcaster 已优雅关闭")
+			return
+		case <-ticker.C:
+			b.batchMu.Lock()
+			flushMap := b.pending
+			// 指针交换快速清空
+			b.pending = make(map[int64][]*mq.BroadcastEnvelope)
+			b.batchMu.Unlock()
 
-		if len(flushMap) == 0 {
-			continue
-		}
+			if len(flushMap) == 0 {
+				continue
+			}
 
-		for roomID, envelopes := range flushMap {
-			b.dispatchBatch(roomID, envelopes)
+			for roomID, envelopes := range flushMap {
+				// 【自适应本地消息密度抽样器 (Adaptive Message Density Sampling)】
+				// 假设 50ms 为一个批次，如果这 50ms 堆积的消息超过 15 条（相当于单秒 300 条极强对端下发密度）
+				// 触发降维打击：无条件放行 VIP/特权/高代价弹幕，对剩下来的普通闲聊弹幕执行滑动丢弃，确保系统永远不可能被击穿。
+				const MaxEnvelopesPerBatch = 15
+				if len(envelopes) > MaxEnvelopesPerBatch {
+					var premium []*mq.BroadcastEnvelope
+					var normal []*mq.BroadcastEnvelope
+
+					for _, env := range envelopes {
+						if env.IsPremium {
+							premium = append(premium, env)
+						} else {
+							normal = append(normal, env)
+						}
+					}
+
+					sampled := premium
+					slotsLeft := MaxEnvelopesPerBatch - len(premium)
+					if slotsLeft > 0 && len(normal) > 0 {
+						// 使用均匀间隔步长算法（匀速抽帧），避免只截断队尾带来的时序偏见
+						step := float64(len(normal)) / float64(slotsLeft)
+						for i := 0; i < slotsLeft; i++ {
+							idx := int(float64(i) * step)
+							if idx < len(normal) {
+								sampled = append(sampled, normal[idx])
+							}
+						}
+					}
+
+					// 替换为处理后的抽样子集
+					envelopes = sampled
+
+					// 记录触发了高能熔断抽样的次数，这里只是做简单的降维统计
+					metrics.SlowConnSkipCount.Add(1)
+				}
+
+				b.dispatchBatch(roomID, envelopes)
+			}
 		}
 	}
+}
+
+// Stop 优雅关闭广播器
+func (b *Broadcaster) Stop() {
+	if b == nil {
+		return
+	}
+	close(b.stopCh)
 }
 
 // BroadcastLocal 在当前机器内广播消息
@@ -89,6 +159,13 @@ func (b *Broadcaster) BroadcastLocal(msg *mq.BroadcastEnvelope) error {
 	// 否则加入积压蓄水池
 	b.batchMu.Lock()
 	b.pending[msg.RoomId] = append(b.pending[msg.RoomId], msg)
+	// 如果积压超过上限，丢弃最旧的消息防止 OOM
+	if len(b.pending[msg.RoomId]) > b.maxPendingPerRoom {
+		dropped := len(b.pending[msg.RoomId]) - b.maxPendingPerRoom
+		b.pending[msg.RoomId] = b.pending[msg.RoomId][dropped:]
+		metrics.SlowConnSkipCount.Add(int64(dropped))
+		log.Printf("pending 队列超限，丢弃 %d 条最旧消息: roomID=%d", dropped, msg.RoomId)
+	}
 	b.batchMu.Unlock()
 
 	return nil

@@ -2,6 +2,7 @@ package mq
 
 import (
 	"context"
+	"errors"
 	"strconv"
 
 	"github.com/segmentio/kafka-go"
@@ -34,8 +35,11 @@ func NewProducer(brokers []string, topic string) *Producer {
 // Publish 发送广播消息到 Kafka
 // 这里使用 RoomId 作为 Key，确保同房间消息落到同一 partition，保证房间内有序
 func (p *Producer) Publish(msg *BroadcastEnvelope) error {
-	if p == nil || msg == nil {
+	if p == nil {
 		return nil
+	}
+	if msg == nil {
+		return errors.New("广播消息为空")
 	}
 
 	value, err := EncodeBroadcastEnvelope(msg)

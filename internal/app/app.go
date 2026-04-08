@@ -98,7 +98,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	a.TextFilter = reloadableFilter
 
-	a.Broadcaster = broadcast.New(roomManager, a.LoopDispatcher, 50*time.Millisecond)
+	a.Broadcaster = broadcast.New(roomManager, a.LoopDispatcher, 50*time.Millisecond, 0)
 
 	// 只有显式启用 Kafka 时才初始化
 	if cfg.EnableKafka && len(cfg.KafkaBrokers) > 0 && cfg.KafkaTopic != "" {
@@ -171,6 +171,8 @@ func (a *App) StartHeartbeatCheck(ctx context.Context) {
 					// 如果超过 90 秒未活跃，则视为僵尸连接关闭
 					if now-cCtx.LastActiveTime.Load() > 90 {
 						log.Printf("连接心跳超时断开: connID=%s userID=%d", cCtx.ConnID, cCtx.UserID)
+						// 从全局连接表中移除，防止内存泄漏
+						a.AllConns.Delete(cCtx.ConnID)
 						conn.Close()
 					}
 					return true
@@ -230,14 +232,18 @@ func (a *App) handleJoinRoom(task *dispatcher.InboundTask, frame *pb.Frame) {
 		return
 	}
 
-	// 1. token 校验 (简单模拟)
-	if req.Token == "" || req.Token == "invalid_token" {
+	// 1. token 校验 (如果配置了 AuthToken)
+	if a.Config.AuthToken != "" && req.Token != a.Config.AuthToken {
 		a.sendError(task, 401, "鉴权失败: 无效的 token")
 		return
 	}
 
-	// 2. 封禁用户校验 (假设 4444 被封禁)
-	if req.UserId <= 0 || req.UserId == 4444 {
+	// 2. 封禁用户校验
+	if req.UserId <= 0 {
+		a.sendError(task, 403, "准入失败: 无效的用户 ID")
+		return
+	}
+	if a.isUserBanned(req.UserId) {
 		a.sendError(task, 403, "准入失败: 该用户已被封禁")
 		return
 	}
@@ -373,6 +379,19 @@ func (a *App) handleHeartbeat(task *dispatcher.InboundTask, frame *pb.Frame) {
 		task.Ctx.RoomID,
 		heartbeat.ClientTs,
 	)
+}
+
+// isUserBanned 检查用户是否在封禁列表中
+func (a *App) isUserBanned(userID int64) bool {
+	if a == nil || a.Config == nil {
+		return false
+	}
+	for _, banned := range a.Config.BannedUsers {
+		if banned == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveLoopIdx 根据连接所属 event-loop 解析逻辑下标
@@ -519,9 +538,11 @@ func (a *App) BroadcastSystemMsg(roomID int64, content string, msgType int32) {
 	if a.Producer != nil {
 		if err := a.Producer.Publish(envelope); err != nil {
 			metrics.KafkaPublishErrCount.Add(1)
-			log.Printf("系统消息发送 Kafka 失败: roomID=%d err=%v", roomID, err)
+			log.Printf("系统消息发送 Kafka 失败，降级到本机广播: roomID=%d err=%v", roomID, err)
+			// Kafka 失败时降级到本机广播
+		} else {
+			return
 		}
-		return
 	}
 
 	// 退化到单机广播
@@ -570,6 +591,9 @@ func (a *App) BroadcastGlobalSystemMsg(content string, msgType int32) {
 // Close 释放服务资源，主要用于优雅停机
 func (a *App) Close() {
 	log.Println("执行 App 资源释放和停机清理...")
+	if a.Broadcaster != nil {
+		a.Broadcaster.Stop()
+	}
 	if a.Producer != nil {
 		_ = a.Producer.Close()
 		log.Println("Kafka Producer 已关闭")

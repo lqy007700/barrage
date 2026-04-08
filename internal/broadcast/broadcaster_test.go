@@ -40,7 +40,7 @@ func (m *mockConn) AsyncWrite(buf []byte, cb gnet.AsyncCallback) error {
 func TestBroadcaster_ActiveLoopAndNoEcho(t *testing.T) {
 	manager := room.NewManager(4)
 	exec := &mockLoopExec{}
-	b := New(manager, exec, 0)
+	b := New(manager, exec, 0, 0)
 
 	conn1 := &mockConn{}
 	conn1.SetContext(&connctx.ConnContext{ConnID: "c1", RoomID: 100, UserID: 1001, IsPremium: false, LoopIdx: 1})
@@ -79,7 +79,7 @@ func TestBroadcaster_ActiveLoopAndNoEcho(t *testing.T) {
 func TestBroadcaster_SlowConnSkip(t *testing.T) {
 	manager := room.NewManager(1)
 	exec := &mockLoopExec{}
-	b := New(manager, exec, 0)
+	b := New(manager, exec, 0, 0)
 
 	// 构造一个超级拥堵连接
 	conn3 := &mockConn{outbound: 600 * 1024} // 大于 512k 测试下线

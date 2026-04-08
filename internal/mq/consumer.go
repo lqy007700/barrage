@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"log"
+	"math"
 	"time"
 
 	"barrage/internal/metrics"
@@ -17,6 +18,9 @@ type Consumer struct {
 
 	// 消息处理回调
 	handle func(*BroadcastEnvelope) error
+
+	// 重试计数器，用于指数退避
+	retryCount int
 }
 
 // NewConsumer 创建 Kafka 消费者
@@ -48,9 +52,15 @@ func (c *Consumer) Start(ctx context.Context) {
 			}
 
 			metrics.KafkaConsumeErrCount.Add(1)
-			log.Printf("读取 Kafka 消息失败，将在 1 秒后重连重试: %v", err)
-			time.Sleep(time.Second)
+			c.retryCount++
+			// 指数退避：1s -> 2s -> 4s -> 8s -> 16s -> 30s (上限)
+			backoff := time.Duration(math.Min(float64(30*time.Second), float64(time.Second)*math.Pow(2, float64(c.retryCount-1))))
+			log.Printf("读取 Kafka 消息失败 (第%d次重试)，%.1f秒后重试: %v", c.retryCount, backoff.Seconds(), err)
+			time.Sleep(backoff)
 			continue
+		} else {
+			// 成功读取，重置重试计数
+			c.retryCount = 0
 		}
 
 		envelope, err := DecodeBroadcastEnvelope(msg.Value)

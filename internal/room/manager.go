@@ -154,6 +154,7 @@ func (m *Manager) AddConnInLoop(roomID int64, loopIdx int, connID string, c gnet
 	r := m.GetOrCreate(roomID)
 
 	if _, exists := r.Shards[loopIdx][connID]; exists {
+		// 连接已存在，更新连接引用
 		r.Shards[loopIdx][connID] = c
 		return
 	}
