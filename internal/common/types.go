@@ -108,6 +108,20 @@ func (s *UserSession) BufferLen() int {
 	return len(s.buffer)
 }
 
+// DropOverflow 丢弃缓冲区中超过maxSize的最旧弹幕
+func (s *UserSession) DropOverflow(maxSize int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.buffer) <= maxSize {
+		return 0
+	}
+
+	dropCount := len(s.buffer) - maxSize
+	s.buffer = s.buffer[dropCount:]
+	return dropCount
+}
+
 // RoomInfo 房间信息 (Edge节点维护)
 type RoomInfo struct {
 	RoomId       int64
