@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -47,7 +48,9 @@ func (p *Producer) Publish(msg *BroadcastEnvelope) error {
 		return err
 	}
 
-	return p.writer.WriteMessages(context.Background(), kafka.Message{
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return p.writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(strconv.FormatInt(msg.RoomId, 10)),
 		Value: value,
 	})

@@ -120,6 +120,21 @@ message BroadcastEnvelope {
 
   // 毫秒时间戳
   int64 timestamp = 6;
+
+  // 视频时间戳 (毫秒) - 弹幕对应的视频时刻，用于弹幕和视频同步
+  int64 video_ts = 7;
+}
+
+// 视频时间戳更新 (用于视频同步)
+message VideoTSUpdate {
+  // 房间 ID
+  int64 room_id = 1;
+
+  // 当前视频时间戳 (毫秒)
+  int64 video_ts = 2;
+
+  // 墙钟发送时间 (毫秒)
+  int64 sent_at = 3;
 }
 
 // 心跳消息

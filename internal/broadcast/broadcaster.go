@@ -13,6 +13,8 @@ import (
 	"github.com/panjf2000/gnet/v2"
 )
 
+const shardCount = 64
+
 // Broadcaster 表示广播器
 type Broadcaster struct {
 	// 房间管理器
@@ -21,8 +23,11 @@ type Broadcaster struct {
 	// 按 loop 分发任务的函数
 	LoopExec LoopExecutor
 
-	batchMu       sync.Mutex
-	pending       map[int64][]*mq.BroadcastEnvelope
+	// 分片 map，按 roomId % shardCount 分桶，减少锁竞争
+	shards [shardCount]struct {
+		mu      sync.Mutex
+		pending map[int64][]*mq.BroadcastEnvelope
+	}
 	batchInterval time.Duration
 
 	// 每房间 pending 队列最大长度，防止 OOM
@@ -50,10 +55,14 @@ func New(rooms *room.Manager, loopExec LoopExecutor, batchInterval time.Duration
 	b := &Broadcaster{
 		Rooms:             rooms,
 		LoopExec:          loopExec,
-		pending:           make(map[int64][]*mq.BroadcastEnvelope),
 		batchInterval:     batchInterval,
 		maxPendingPerRoom: maxPendingPerRoom,
 		stopCh:            make(chan struct{}),
+	}
+
+	// 初始化分片
+	for i := range b.shards {
+		b.shards[i].pending = make(map[int64][]*mq.BroadcastEnvelope)
 	}
 
 	// 启用后台轮询微批积压打包
@@ -73,64 +82,71 @@ func (b *Broadcaster) startBatchTicker() {
 		select {
 		case <-b.stopCh:
 			// 优雅关闭：处理完剩余消息再退出
-			b.batchMu.Lock()
-			flushMap := b.pending
-			b.pending = make(map[int64][]*mq.BroadcastEnvelope)
-			b.batchMu.Unlock()
-			for roomID, envelopes := range flushMap {
-				b.dispatchBatch(roomID, envelopes)
+			for i := range b.shards {
+				shard := &b.shards[i]
+				shard.mu.Lock()
+				flushMap := shard.pending
+				shard.pending = make(map[int64][]*mq.BroadcastEnvelope)
+				shard.mu.Unlock()
+				for roomID, envelopes := range flushMap {
+					b.dispatchBatch(roomID, envelopes)
+				}
 			}
 			log.Printf("Broadcaster 已优雅关闭")
 			return
 		case <-ticker.C:
-			b.batchMu.Lock()
-			flushMap := b.pending
-			// 指针交换快速清空
-			b.pending = make(map[int64][]*mq.BroadcastEnvelope)
-			b.batchMu.Unlock()
+			// 遍历所有分片收集待发送消息
+			for i := range b.shards {
+				shard := &b.shards[i]
+				shard.mu.Lock()
+				flushMap := shard.pending
+				// 指针交换快速清空
+				shard.pending = make(map[int64][]*mq.BroadcastEnvelope)
+				shard.mu.Unlock()
 
-			if len(flushMap) == 0 {
-				continue
-			}
-
-			for roomID, envelopes := range flushMap {
-				// 【自适应本地消息密度抽样器 (Adaptive Message Density Sampling)】
-				// 假设 50ms 为一个批次，如果这 50ms 堆积的消息超过 15 条（相当于单秒 300 条极强对端下发密度）
-				// 触发降维打击：无条件放行 VIP/特权/高代价弹幕，对剩下来的普通闲聊弹幕执行滑动丢弃，确保系统永远不可能被击穿。
-				const MaxEnvelopesPerBatch = 15
-				if len(envelopes) > MaxEnvelopesPerBatch {
-					var premium []*mq.BroadcastEnvelope
-					var normal []*mq.BroadcastEnvelope
-
-					for _, env := range envelopes {
-						if env.IsPremium {
-							premium = append(premium, env)
-						} else {
-							normal = append(normal, env)
-						}
-					}
-
-					sampled := premium
-					slotsLeft := MaxEnvelopesPerBatch - len(premium)
-					if slotsLeft > 0 && len(normal) > 0 {
-						// 使用均匀间隔步长算法（匀速抽帧），避免只截断队尾带来的时序偏见
-						step := float64(len(normal)) / float64(slotsLeft)
-						for i := 0; i < slotsLeft; i++ {
-							idx := int(float64(i) * step)
-							if idx < len(normal) {
-								sampled = append(sampled, normal[idx])
-							}
-						}
-					}
-
-					// 替换为处理后的抽样子集
-					envelopes = sampled
-
-					// 记录触发了高能熔断抽样的次数，这里只是做简单的降维统计
-					metrics.SlowConnSkipCount.Add(1)
+				if len(flushMap) == 0 {
+					continue
 				}
 
-				b.dispatchBatch(roomID, envelopes)
+				for roomID, envelopes := range flushMap {
+					// 【自适应本地消息密度抽样器 (Adaptive Message Density Sampling)】
+					// 假设 50ms 为一个批次，如果这 50ms 堆积的消息超过 15 条（相当于单秒 300 条极强对端下发密度）
+					// 触发降维打击：无条件放行 VIP/特权/高代价弹幕，对剩下来的普通闲聊弹幕执行滑动丢弃，确保系统永远不可能被击穿。
+					const MaxEnvelopesPerBatch = 15
+					if len(envelopes) > MaxEnvelopesPerBatch {
+						var premium []*mq.BroadcastEnvelope
+						var normal []*mq.BroadcastEnvelope
+
+						for _, env := range envelopes {
+							if env.IsPremium {
+								premium = append(premium, env)
+							} else {
+								normal = append(normal, env)
+							}
+						}
+
+						sampled := premium
+						slotsLeft := MaxEnvelopesPerBatch - len(premium)
+						if slotsLeft > 0 && len(normal) > 0 {
+							// 使用均匀间隔步长算法（匀速抽帧），避免只截断队尾带来的时序偏见
+							step := float64(len(normal)) / float64(slotsLeft)
+							for idx := 0; idx < slotsLeft; idx++ {
+								envIdx := int(float64(idx) * step)
+								if envIdx < len(normal) {
+									sampled = append(sampled, normal[envIdx])
+								}
+							}
+						}
+
+						// 替换为处理后的抽样子集
+						envelopes = sampled
+
+						// 记录触发了高能熔断抽样的次数，这里只是做简单的降维统计
+						metrics.SlowConnSkipCount.Add(1)
+					}
+
+					b.dispatchBatch(roomID, envelopes)
+				}
 			}
 		}
 	}
@@ -156,17 +172,21 @@ func (b *Broadcaster) BroadcastLocal(msg *mq.BroadcastEnvelope) error {
 		return nil
 	}
 
+	// 根据 roomId 选择对应分片，减少锁竞争
+	shardIdx := msg.RoomId % shardCount
+	shard := &b.shards[shardIdx]
+
 	// 否则加入积压蓄水池
-	b.batchMu.Lock()
-	b.pending[msg.RoomId] = append(b.pending[msg.RoomId], msg)
+	shard.mu.Lock()
+	shard.pending[msg.RoomId] = append(shard.pending[msg.RoomId], msg)
 	// 如果积压超过上限，丢弃最旧的消息防止 OOM
-	if len(b.pending[msg.RoomId]) > b.maxPendingPerRoom {
-		dropped := len(b.pending[msg.RoomId]) - b.maxPendingPerRoom
-		b.pending[msg.RoomId] = b.pending[msg.RoomId][dropped:]
+	if len(shard.pending[msg.RoomId]) > b.maxPendingPerRoom {
+		dropped := len(shard.pending[msg.RoomId]) - b.maxPendingPerRoom
+		shard.pending[msg.RoomId] = shard.pending[msg.RoomId][dropped:]
 		metrics.SlowConnSkipCount.Add(int64(dropped))
 		log.Printf("pending 队列超限，丢弃 %d 条最旧消息: roomID=%d", dropped, msg.RoomId)
 	}
-	b.batchMu.Unlock()
+	shard.mu.Unlock()
 
 	return nil
 }
