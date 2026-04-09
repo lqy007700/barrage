@@ -32,6 +32,7 @@ type Room struct {
 	// 活跃 loop 位图
 	// 第 i 位为 1 表示该房间在 loop i 上当前至少有一个连接
 	ActiveLoops atomic.Uint64
+	loops       []atomic.Bool
 }
 
 // bucket 表示房间管理器中的一个物理分桶
@@ -286,6 +287,17 @@ func (m *Manager) RangeShardInLoop(roomID int64, loopIdx int, fn func(connID str
 	}
 }
 
+// RangeLoopConns 遍历指定 loop 分片的所有连接（线程安全）
+// 注意：遍历期间连接可能被删除，但不会造成 panic（map 遍历安全）
+func (r *Room) RangeLoopConns(loopIdx int, fn func(conn gnet.Conn)) {
+	if loopIdx < 0 || loopIdx >= len(r.Shards) {
+		return
+	}
+	for _, conn := range r.Shards[loopIdx] {
+		fn(conn)
+	}
+}
+
 // StartRoomCleaner 开启后台定期清理空闲房间
 // idleSeconds: 空闲多少秒后认为可以安全销毁
 func (m *Manager) StartRoomCleaner(ctx context.Context, idleSeconds int64) {
@@ -317,7 +329,7 @@ func (m *Manager) StartRoomCleaner(ctx context.Context, idleSeconds int64) {
 // cleanBucket 清理具体的分桶
 func (m *Manager) cleanBucket(idx int, now int64, idleSeconds int64) {
 	b := m.buckets[idx]
-	
+
 	// 在清理时必须要拿到桶的写锁
 	b.mu.Lock()
 	defer b.mu.Unlock()

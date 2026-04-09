@@ -201,7 +201,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	a.TextFilter = reloadableFilter
 
-	a.Broadcaster = broadcast.New(roomManager, a.LoopDispatcher, 50*time.Millisecond, 0)
+	a.Broadcaster = broadcast.New(roomManager)
 
 	// 只有显式启用 Kafka 时才初始化
 	if cfg.EnableKafka && len(cfg.KafkaBrokers) > 0 && cfg.KafkaTopic != "" {
@@ -210,7 +210,13 @@ func New(cfg *config.Config) (*App, error) {
 			cfg.KafkaBrokers,
 			cfg.KafkaTopic,
 			cfg.KafkaGroupID,
-			a.HandleMQBroadcast,
+			func(msg *mq.BroadcastEnvelope) error {
+				// 提交到 WorkerPool 处理，不阻塞 Consumer
+				a.WorkerPool.Submit(func() {
+					a.Broadcaster.BroadcastLocal(msg)
+				})
+				return nil
+			},
 		)
 	}
 
@@ -324,20 +330,6 @@ func (a *App) StartHeartbeatCheck(ctx context.Context) {
 			}
 		}
 	}()
-}
-
-// HandleMQBroadcast 处理 Kafka 广播消息
-func (a *App) HandleMQBroadcast(msg *mq.BroadcastEnvelope) error {
-	if a == nil || a.Broadcaster == nil || msg == nil {
-		return nil
-	}
-
-	// Kafka 消费后的消息，只在本机有该房间连接时才进行广播
-	if !a.RoomManager.HasLocalRoom(msg.RoomId) {
-		return nil
-	}
-
-	return a.Broadcaster.BroadcastLocal(msg)
 }
 
 // HandleInbound 处理入站消息
@@ -748,9 +740,6 @@ func (a *App) BroadcastGlobalSystemMsg(content string, msgType int32) {
 // Close 释放服务资源，主要用于优雅停机
 func (a *App) Close() {
 	log.Println("执行 App 资源释放和停机清理...")
-	if a.Broadcaster != nil {
-		a.Broadcaster.Stop()
-	}
 	if a.Producer != nil {
 		_ = a.Producer.Close()
 		log.Println("Kafka Producer 已关闭")

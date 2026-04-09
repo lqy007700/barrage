@@ -154,14 +154,11 @@ func (r *ConsulRegistry) Deregister(ctx context.Context, serviceId string) error
 	return nil
 }
 
-// Heartbeat 心跳 (Consul自动健康检查)
+// Heartbeat 心跳
+// Consul 使用 AgentServiceCheck 自动进行 HTTP 健康检查，无需手动心跳
+// 此方法保留为接口实现，但实际不会被调用（heartbeatLoop 中已过滤非 Etcd 类型）
 func (r *ConsulRegistry) Heartbeat(ctx context.Context, serviceId string) error {
-	// Consul的AgentServiceCheck会自动进行健康检查
-	// 这里可以通过更新服务元数据来触发心跳
-	err := r.client.Agent().ServiceRegister(&api.AgentServiceRegistration{
-		ID: serviceId,
-	})
-	return err
+	return nil
 }
 
 // GetServices 获取服务列表
@@ -401,7 +398,17 @@ func (s *ServiceRegistrar) Start(ctx context.Context) error {
 }
 
 // heartbeatLoop 心跳循环
+// 注意：Consul 使用 HTTP 健康检查自动进行心跳，无需手动续约
+// Etcd 使用 TTL 续约机制，需要此心跳循环来维持服务注册
+// 为保持代码兼容性，此处保留心跳逻辑，实际是否执行由 Registry 类型决定
+// func (s *ServiceRegistrar) heartbeatLoop(ctx context.Context) {
 func (s *ServiceRegistrar) heartbeatLoop(ctx context.Context) {
+	// Consul Registry 不需要心跳，Consul Agent 会自动进行健康检查
+	// 只有 Etcd Registry 才需要 TTL 续约
+	if _, ok := s.registry.(*EtcdRegistry); !ok {
+		return
+	}
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 

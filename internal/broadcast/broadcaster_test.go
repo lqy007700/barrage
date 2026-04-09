@@ -9,17 +9,6 @@ import (
 	"github.com/panjf2000/gnet/v2"
 )
 
-// mockLoopExec 极简任务派发代理
-type mockLoopExec struct {
-	dispatched []int
-}
-
-func (m *mockLoopExec) Dispatch(loopIdx int, task func()) error {
-	m.dispatched = append(m.dispatched, loopIdx)
-	task() // 同步执行模拟
-	return nil
-}
-
 // mockConn 极简连接代理
 type mockConn struct {
 	gnet.Conn // 屏蔽全部未用到接口
@@ -37,10 +26,9 @@ func (m *mockConn) AsyncWrite(buf []byte, cb gnet.AsyncCallback) error {
 	return nil
 }
 
-func TestBroadcaster_ActiveLoopAndNoEcho(t *testing.T) {
+func TestBroadcaster_NoEcho(t *testing.T) {
 	manager := room.NewManager(4)
-	exec := &mockLoopExec{}
-	b := New(manager, exec, 0, 0)
+	b := New(manager)
 
 	conn1 := &mockConn{}
 	conn1.SetContext(&connctx.ConnContext{ConnID: "c1", RoomID: 100, UserID: 1001, IsPremium: false, LoopIdx: 1})
@@ -53,7 +41,7 @@ func TestBroadcaster_ActiveLoopAndNoEcho(t *testing.T) {
 	// 测试广播（c1 产生了一条全房广播消息）
 	envelope := &mq.BroadcastEnvelope{
 		RoomId:       100,
-		SenderConnId: "c1", // 提供 SendConnId 是触发不回显特性的关键
+		SenderConnId: "c1", // 提供 SenderConnId 是触发不回显特性的关键
 		Payload:      []byte("hello_packet"),
 	}
 
@@ -62,12 +50,7 @@ func TestBroadcaster_ActiveLoopAndNoEcho(t *testing.T) {
 		t.Fatalf("局域广播失败: %v", err)
 	}
 
-	// 1. 验证 ActiveLoopIndexes 触发联动（只有分片 1 和 3 因为持有客端而产生了任务调度派发）
-	if len(exec.dispatched) != 2 {
-		t.Fatalf("预判应当分发出 2 条 loop 任务, 实际发生: %d", len(exec.dispatched))
-	}
-
-	// 2. 验证防自我回显特性
+	// 1. 验证防自我回显特性
 	if conn1.written != 0 {
 		t.Fatalf("发现异常：发送者 c1 收到了自我发送 Echo 弹幕反射")
 	}
@@ -78,8 +61,7 @@ func TestBroadcaster_ActiveLoopAndNoEcho(t *testing.T) {
 
 func TestBroadcaster_SlowConnSkip(t *testing.T) {
 	manager := room.NewManager(1)
-	exec := &mockLoopExec{}
-	b := New(manager, exec, 0, 0)
+	b := New(manager)
 
 	// 构造一个超级拥堵连接
 	conn3 := &mockConn{outbound: 600 * 1024} // 大于 512k 测试下线

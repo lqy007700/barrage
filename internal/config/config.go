@@ -50,8 +50,8 @@ type Config struct {
 	MetricsAddr string // 默认 :9090
 
 	// 连接限制配置
-	MaxConns         int // 节点最大连接数，默认 10万
-	MaxConnsPerUser  int // 单用户最大连接数，默认 3
+	MaxConns        int // 节点最大连接数，默认 10万
+	MaxConnsPerUser int // 单用户最大连接数，默认 3
 
 	// 消息频率限制
 	MsgRatePerUser   int // 单用户每秒允许消息数，默认 10
@@ -91,7 +91,7 @@ func Load() *Config {
 		KafkaGroupID: uniqueGroupID,
 
 		// Registry 配置
-		RegistryType: "static",
+		RegistryType: "consul",
 		RegistryAddr: "",
 		NodeId:       nodeId,
 		ServiceName:  "barrage",
