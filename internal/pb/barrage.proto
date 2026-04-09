@@ -103,6 +103,12 @@ message BroadcastMsg {
 
 // Kafka 广播链路中的统一消息体
 message BroadcastEnvelope {
+  // 消息类型：0=弹幕(不重试), 1=礼物(重试), 2=道具(重试), 3=彩色弹幕(重试)
+  int32 msg_type = 8;
+
+  // 幂等key，用于特殊消息去重 (格式: userId_roomId_timestamp_random)
+  string idempotency_key = 9;
+
   // 房间 ID
   int64 room_id = 1;
 

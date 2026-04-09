@@ -88,7 +88,8 @@ func (s *Sampler) ShouldDropWithLevel(roomId int64, level common.HotLevel) bool 
 		return false
 	}
 
-	cfg := common.GetHotConfig(int32(level))
+	// 根据热点级别获取采样率
+	cfg := common.GetHotConfigByLevel(level)
 	drop := float32(rand.Intn(100))/100.0 > cfg.SampleRate
 
 	s.mu.RLock()

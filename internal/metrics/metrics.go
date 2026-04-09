@@ -26,6 +26,9 @@ var (
 
 	// SlowConnSkipCount 慢连接（外发缓冲区超载）被跳过下发的总次数
 	SlowConnSkipCount atomic.Int64
+
+	// RateLimitRejectCount 频率限制触发驳回总数
+	RateLimitRejectCount atomic.Int64
 )
 
 // ---------------------------------------------------------

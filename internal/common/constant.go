@@ -63,10 +63,20 @@ var HotConfigs = []HotConfig{
 	{Level: HotLevelNormal, SampleRate: SamplerRateNormal, Threshold: 0},
 }
 
-// GetHotConfig 获取热点配置
+// GetHotConfig 获取热点配置 (按连接数)
 func GetHotConfig(count int32) HotConfig {
 	for _, c := range HotConfigs {
 		if count >= c.Threshold {
+			return c
+		}
+	}
+	return HotConfigs[len(HotConfigs)-1]
+}
+
+// GetHotConfigByLevel 获取热点配置 (按热点级别)
+func GetHotConfigByLevel(level HotLevel) HotConfig {
+	for _, c := range HotConfigs {
+		if c.Level == level {
 			return c
 		}
 	}

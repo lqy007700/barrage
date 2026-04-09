@@ -6,6 +6,9 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/consul/api"
+	"go.etcd.io/etcd/client/v3"
 )
 
 // Registry 注册中心接口
@@ -29,39 +32,6 @@ type ServiceInfo struct {
 	Port     int               // 端口
 	Tags     []string          // 标签
 	Meta     map[string]string // 元数据
-}
-
-// ConsulRegistry Consul实现 (示例)
-type ConsulRegistry struct {
-	addr string
-}
-
-// NewConsulRegistry 创建Consul注册中心
-func NewConsulRegistry(addr string) *ConsulRegistry {
-	return &ConsulRegistry{addr: addr}
-}
-
-// Register 注册服务
-func (r *ConsulRegistry) Register(ctx context.Context, info *ServiceInfo) error {
-	// TODO: 实现 Consul 注册
-	log.Printf("[Consul] Register service: %s -> %s:%d", info.Name, info.Addr, info.Port)
-	return nil
-}
-
-// Deregister 注销服务
-func (r *ConsulRegistry) Deregister(ctx context.Context, serviceId string) error {
-	log.Printf("[Consul] Deregister service: %s", serviceId)
-	return nil
-}
-
-// Heartbeat 心跳
-func (r *ConsulRegistry) Heartbeat(ctx context.Context, serviceId string) error {
-	return nil
-}
-
-// GetServices 获取服务列表
-func (r *ConsulRegistry) GetServices(ctx context.Context, serviceName string) ([]*ServiceInfo, error) {
-	return nil, nil
 }
 
 // StaticRegistry 静态注册中心 (用于测试/简单部署)
@@ -125,12 +95,290 @@ func (r *StaticRegistry) GetAllServices() []*ServiceInfo {
 	return result
 }
 
+// ConsulRegistry Consul实现
+type ConsulRegistry struct {
+	addr   string
+	client *api.Client
+}
+
+// NewConsulRegistry 创建Consul注册中心
+func NewConsulRegistry(addr string) (*ConsulRegistry, error) {
+	config := &api.Config{
+		Address: addr,
+	}
+	client, err := api.NewClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("create consul client: %w", err)
+	}
+
+	log.Printf("[Consul] Registry connected to %s", addr)
+	return &ConsulRegistry{
+		addr:   addr,
+		client: client,
+	}, nil
+}
+
+// Register 注册服务
+func (r *ConsulRegistry) Register(ctx context.Context, info *ServiceInfo) error {
+	registration := &api.AgentServiceRegistration{
+		ID:      info.ID,
+		Name:    info.Name,
+		Address: info.Addr,
+		Port:    info.Port,
+		Tags:    info.Tags,
+		Meta:    info.Meta,
+	}
+
+	// 设置健康检查
+	registration.Check = &api.AgentServiceCheck{
+		HTTP:                           fmt.Sprintf("http://%s:%d/health", info.Addr, info.Port),
+		Interval:                       "10s",
+		Timeout:                        "5s",
+		DeregisterCriticalServiceAfter: "30s",
+	}
+
+	if err := r.client.Agent().ServiceRegister(registration); err != nil {
+		return fmt.Errorf("register service to consul: %w", err)
+	}
+
+	log.Printf("[Consul] Registered service: %s -> %s:%d", info.Name, info.Addr, info.Port)
+	return nil
+}
+
+// Deregister 注销服务
+func (r *ConsulRegistry) Deregister(ctx context.Context, serviceId string) error {
+	if err := r.client.Agent().ServiceDeregister(serviceId); err != nil {
+		return fmt.Errorf("deregister service from consul: %w", err)
+	}
+	log.Printf("[Consul] Deregistered service: %s", serviceId)
+	return nil
+}
+
+// Heartbeat 心跳 (Consul自动健康检查)
+func (r *ConsulRegistry) Heartbeat(ctx context.Context, serviceId string) error {
+	// Consul的AgentServiceCheck会自动进行健康检查
+	// 这里可以通过更新服务元数据来触发心跳
+	err := r.client.Agent().ServiceRegister(&api.AgentServiceRegistration{
+		ID: serviceId,
+	})
+	return err
+}
+
+// GetServices 获取服务列表
+func (r *ConsulRegistry) GetServices(ctx context.Context, serviceName string) ([]*ServiceInfo, error) {
+	services, err := r.client.Agent().ServicesWithFilter(fmt.Sprintf(`Service == "%s"`, serviceName))
+	if err != nil {
+		return nil, fmt.Errorf("query services from consul: %w", err)
+	}
+
+	var result []*ServiceInfo
+	for _, svc := range services {
+		result = append(result, &ServiceInfo{
+			ID:   svc.ID,
+			Name: svc.Service,
+			Addr: svc.Address,
+			Port: svc.Port,
+			Tags: svc.Tags,
+			Meta: svc.Meta,
+		})
+	}
+
+	return result, nil
+}
+
+// GetService 获取单个服务
+func (r *ConsulRegistry) GetService(ctx context.Context, serviceId string) (*ServiceInfo, error) {
+	svc, _, err := r.client.Agent().Service(serviceId, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get service from consul: %w", err)
+	}
+
+	return &ServiceInfo{
+		ID:   svc.ID,
+		Name: svc.Service,
+		Addr: svc.Address,
+		Port: svc.Port,
+		Tags: svc.Tags,
+		Meta: svc.Meta,
+	}, nil
+}
+
+// EtcdRegistry Etcd实现
+type EtcdRegistry struct {
+	addr   string
+	client *clientv3.Client
+}
+
+// NewEtcdRegistry 创建Etcd注册中心
+func NewEtcdRegistry(addr string) (*EtcdRegistry, error) {
+	client, err := clientv3.NewFromURL(addr)
+	if err != nil {
+		return nil, fmt.Errorf("create etcd client: %w", err)
+	}
+
+	log.Printf("[Etcd] Registry connected to %s", addr)
+	return &EtcdRegistry{
+		addr:   addr,
+		client: client,
+	}, nil
+}
+
+// Close 关闭Etcd客户端
+func (r *EtcdRegistry) Close() error {
+	return r.client.Close()
+}
+
+// serviceKey 生成服务在etcd中的key
+func serviceKey(serviceId string) string {
+	return fmt.Sprintf("/services/%s", serviceId)
+}
+
+// Register 注册服务
+func (r *EtcdRegistry) Register(ctx context.Context, info *ServiceInfo) error {
+	// 将服务信息存入etcd，使用serviceId作为key
+	key := serviceKey(info.ID)
+
+	// 构建value
+	value := fmt.Sprintf("%s:%d", info.Addr, info.Port)
+
+	// 设置10秒的TTL，Heartbeat会续约
+	lease, err := r.client.Grant(ctx, 10)
+	if err != nil {
+		return fmt.Errorf("create etcd lease: %w", err)
+	}
+
+	_, err = r.client.Put(ctx, key, value, clientv3.WithLease(lease.ID))
+	if err != nil {
+		return fmt.Errorf("put service to etcd: %w", err)
+	}
+
+	// 存储完整的元数据
+	metaKey := fmt.Sprintf("%s/meta", key)
+	_, err = r.client.Put(ctx, metaKey, fmt.Sprintf(`{"name":"%s","tags":%v,"meta":%v}`,
+		info.Name, info.Tags, info.Meta), clientv3.WithLease(lease.ID))
+	if err != nil {
+		return fmt.Errorf("put service meta to etcd: %w", err)
+	}
+
+	log.Printf("[Etcd] Registered service: %s -> %s", info.Name, value)
+	return nil
+}
+
+// Deregister 注销服务
+func (r *EtcdRegistry) Deregister(ctx context.Context, serviceId string) error {
+	key := serviceKey(serviceId)
+	_, err := r.client.Delete(ctx, key)
+	if err != nil {
+		return fmt.Errorf("delete service from etcd: %w", err)
+	}
+
+	// 删除元数据
+	metaKey := fmt.Sprintf("%s/meta", key)
+	r.client.Delete(ctx, metaKey)
+
+	log.Printf("[Etcd] Deregistered service: %s", serviceId)
+	return nil
+}
+
+// Heartbeat 心跳 (续约TTL)
+func (r *EtcdRegistry) Heartbeat(ctx context.Context, serviceId string) error {
+	key := serviceKey(serviceId)
+
+	// 获取现有的key
+	resp, err := r.client.Get(ctx, key)
+	if err != nil {
+		return fmt.Errorf("get service from etcd: %w", err)
+	}
+
+	if resp.Count == 0 {
+		return fmt.Errorf("service not found: %s", serviceId)
+	}
+
+	// 创建一个新的10秒TTL的lease来续约
+	lease, err := r.client.Grant(ctx, 10)
+	if err != nil {
+		return fmt.Errorf("create etcd lease: %w", err)
+	}
+
+	// 重新put以续约TTL
+	_, err = r.client.Put(ctx, key, string(resp.Kvs[0].Value), clientv3.WithLease(lease.ID))
+	if err != nil {
+		return fmt.Errorf("refresh service TTL in etcd: %w", err)
+	}
+
+	// 同样续约元数据
+	metaKey := fmt.Sprintf("%s/meta", key)
+	metaResp, _ := r.client.Get(ctx, metaKey)
+	if metaResp != nil && metaResp.Count > 0 {
+		_, _ = r.client.Put(ctx, metaKey, string(metaResp.Kvs[0].Value), clientv3.WithLease(lease.ID))
+	}
+
+	return nil
+}
+
+// GetServices 获取服务列表
+func (r *EtcdRegistry) GetServices(ctx context.Context, serviceName string) ([]*ServiceInfo, error) {
+	// 查询所有services下的key
+	resp, err := r.client.Get(ctx, "/services/", clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("list services from etcd: %w", err)
+	}
+
+	var result []*ServiceInfo
+	for _, kv := range resp.Kvs {
+		key := string(kv.Key)
+		// 跳过meta key
+		if len(key) > 5 && key[len(key)-5:] == "/meta" {
+			continue
+		}
+
+		// 提取serviceId从key中: /services/{serviceId}
+		serviceId := key[10:] // 去掉 "/services/" 前缀
+
+		// 获取元数据
+		metaKey := fmt.Sprintf("%s/meta", key)
+		metaResp, _ := r.client.Get(ctx, metaKey)
+
+		info := &ServiceInfo{
+			ID:   serviceId,
+			Addr: string(kv.Value),
+		}
+
+		// 解析 addr:port 格式
+		fmt.Sscanf(info.Addr, "%s:%d", &info.Addr, &info.Port)
+
+		if metaResp != nil && metaResp.Count > 0 {
+			// 元数据可以进一步解析，这里简化处理
+			info.Name = serviceName
+		}
+
+		result = append(result, info)
+	}
+
+	return result, nil
+}
+
+// NewRegistry 根据类型创建注册中心
+// 类型支持: "static", "consul", "etcd"
+func NewRegistry(registryType string, addr string) (Registry, error) {
+	switch registryType {
+	case "consul":
+		return NewConsulRegistry(addr)
+	case "etcd":
+		return NewEtcdRegistry(addr)
+	case "static":
+		return NewStaticRegistry(), nil
+	default:
+		return nil, fmt.Errorf("unknown registry type: %s", registryType)
+	}
+}
+
 // ServiceRegistrar 服务注册器
 // 封装注册逻辑，自动心跳
 type ServiceRegistrar struct {
 	registry Registry
-	info    *ServiceInfo
-	stopCh  chan struct{}
+	info     *ServiceInfo
+	stopCh   chan struct{}
 }
 
 // NewServiceRegistrar 创建服务注册器

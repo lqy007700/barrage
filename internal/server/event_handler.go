@@ -41,6 +41,14 @@ func (h *EventHandler) OnBoot(eng gnet.Engine) gnet.Action {
 
 // OnOpen 在连接建立时触发
 func (h *EventHandler) OnOpen(c gnet.Conn) ([]byte, gnet.Action) {
+	// 检查节点总连接数限制
+	if h.App != nil {
+		if h.App.CurrConnCount.Add(1) > int64(h.App.Config.MaxConns) {
+			h.App.CurrConnCount.Add(-1)
+			return nil, gnet.Close // 超过节点连接数限制
+		}
+	}
+
 	// 连接建立时立即生成唯一连接 ID
 	// 后续加入房间、广播排除发送方、断连清理都会复用这个标识
 	connID := ""
@@ -89,12 +97,13 @@ func (h *EventHandler) OnClose(c gnet.Conn, err error) gnet.Action {
 
 	if h.App != nil {
 		h.App.AllConns.Delete(ctx.ConnID)
-	}
+		h.App.CurrConnCount.Add(-1) // 减少连接计数
 
-	// 如果连接之前已经进入房间，则在关闭时移除房间索引
-	// 当前先保留这一步，后面如果你要进一步严格约束 loop 内调用，再单独优化
-	if h.App != nil && h.App.RoomManager != nil && ctx.RoomID > 0 && ctx.UserID > 0 {
-		h.App.RoomManager.RemoveConnInLoop(ctx.RoomID, ctx.LoopIdx, ctx.ConnID)
+		// 如果连接之前已经进入房间，则在关闭时移除房间索引并减少用户连接计数
+		if h.App.RoomManager != nil && ctx.RoomID > 0 && ctx.UserID > 0 {
+			h.App.RoomManager.RemoveConnInLoop(ctx.RoomID, ctx.LoopIdx, ctx.ConnID)
+			h.App.RemoveUserConn(ctx.UserID)
+		}
 	}
 
 	return gnet.None

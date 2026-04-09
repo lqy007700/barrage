@@ -477,6 +477,10 @@ func (x *BroadcastMsg) GetTimestamp() int64 {
 // Kafka 广播链路中的统一消息体
 type BroadcastEnvelope struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// 消息类型：0=弹幕(不重试), 1=礼物(重试), 2=道具(重试), 3=彩色弹幕(重试)
+	MsgType int32 `protobuf:"varint,8,opt,name=msg_type,json=msgType,proto3" json:"msg_type,omitempty"`
+	// 幂等key，用于特殊消息去重 (格式: userId_roomId_timestamp_random)
+	IdempotencyKey string `protobuf:"bytes,9,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	// 房间 ID
 	RoomId int64 `protobuf:"varint,1,opt,name=room_id,json=roomId,proto3" json:"room_id,omitempty"`
 	// 发送者用户 ID
@@ -523,6 +527,20 @@ func (x *BroadcastEnvelope) ProtoReflect() protoreflect.Message {
 // Deprecated: Use BroadcastEnvelope.ProtoReflect.Descriptor instead.
 func (*BroadcastEnvelope) Descriptor() ([]byte, []int) {
 	return file_internal_pb_barrage_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *BroadcastEnvelope) GetMsgType() int32 {
+	if x != nil {
+		return x.MsgType
+	}
+	return 0
+}
+
+func (x *BroadcastEnvelope) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
 }
 
 func (x *BroadcastEnvelope) GetRoomId() int64 {
@@ -713,8 +731,10 @@ const file_internal_pb_barrage_proto_rawDesc = "" +
 	"\aroom_id\x18\x01 \x01(\x03R\x06roomId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12\x12\n" +
 	"\x04body\x18\x03 \x01(\fR\x04body\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"\xdd\x01\n" +
-	"\x11BroadcastEnvelope\x12\x17\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"\xa1\x02\n" +
+	"\x11BroadcastEnvelope\x12\x19\n" +
+	"\bmsg_type\x18\b \x01(\x05R\amsgType\x12'\n" +
+	"\x0fidempotency_key\x18\t \x01(\tR\x0eidempotencyKey\x12\x17\n" +
 	"\aroom_id\x18\x01 \x01(\x03R\x06roomId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x03R\x06userId\x12$\n" +
 	"\x0esender_conn_id\x18\x03 \x01(\tR\fsenderConnId\x12\x1d\n" +

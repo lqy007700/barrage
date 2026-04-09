@@ -74,15 +74,15 @@ func (d *LoopDispatcher) Dispatch(loopIdx int, task func()) error {
 	// 指标上报打点：投递总数
 	d.Metrics.TotalDispatches.Add(1)
 
-	d.mu.RLock()
+	d.mu.Lock()
 	loop, ok := d.loops[loopIdx]
-	d.mu.RUnlock()
 	if !ok {
+		d.mu.Unlock()
 		// 指标上报打点：Loop未绑定导致丢弃
 		d.Metrics.ErrNotBoundCount.Add(1)
 		return ErrLoopNotBound
 	}
-	
+
 	err := loop.Execute(
 		context.Background(),
 		gnet.RunnableFunc(func(ctx context.Context) error {
@@ -90,6 +90,7 @@ func (d *LoopDispatcher) Dispatch(loopIdx int, task func()) error {
 			return nil
 		}),
 	)
+	d.mu.Unlock()
 
 	if err != nil {
 		// 指标上报打点：Loop队列满或阻塞报错

@@ -10,12 +10,16 @@ import (
 	"barrage/internal/mq"
 	"barrage/internal/pb"
 	"barrage/internal/protocol/ws"
+	"barrage/internal/registry"
 	"barrage/internal/room"
 	"barrage/internal/worker"
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/gnet/v2"
@@ -57,8 +61,105 @@ type App struct {
 	// Kafka 消费者
 	Consumer *mq.Consumer
 
+	// 服务注册中心
+	Registry     registry.Registry
+	Registrar    *registry.ServiceRegistrar
+	ServiceInfo  *registry.ServiceInfo
+
 	// 全局连接表，用于心跳检测等
 	AllConns sync.Map
+
+	// 当前节点总连接数
+	CurrConnCount atomic.Int64
+
+	// 单用户连接数限制
+	userConnCount map[int64]int64
+	userConnMu    sync.RWMutex
+
+	// 消息频率限制器
+	RateLimiter *RateLimiter
+
+	// Metrics HTTP 服务器
+	MetricsServer *MetricsServer
+}
+
+// RateLimiter 消息频率限制器 (Token Bucket)
+type RateLimiter struct {
+	mu       sync.RWMutex
+	users    map[int64]*userBucket
+	rate     int // 每秒允许的消息数
+	capacity int // 桶容量（突发能力）
+}
+
+type userBucket struct {
+	tokens    float64
+	lastUpdate int64 // Unix秒
+}
+
+// NewRateLimiter 创建频率限制器
+func NewRateLimiter(rate, capacity int) *RateLimiter {
+	return &RateLimiter{
+		users:    make(map[int64]*userBucket),
+		rate:     rate,
+		capacity: capacity,
+	}
+}
+
+// Allow 检查是否允许发送
+func (r *RateLimiter) Allow(userId int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().Unix()
+	bucket := r.users[userId]
+
+	if bucket == nil {
+		r.users[userId] = &userBucket{
+			tokens:    float64(r.capacity - 1),
+			lastUpdate: now,
+		}
+		return true
+	}
+
+	// 计算补充的token
+	elapsed := now - bucket.lastUpdate
+	bucket.tokens += float64(elapsed) * float64(r.rate)
+	if bucket.tokens > float64(r.capacity) {
+		bucket.tokens = float64(r.capacity)
+	}
+	bucket.lastUpdate = now
+
+	if bucket.tokens >= 1 {
+		bucket.tokens -= 1
+		return true
+	}
+	return false
+}
+
+// addUserConn 增加用户连接计数
+// 返回 true 表示允许，false 表示超过限制
+func (a *App) addUserConn(userId int64) bool {
+	a.userConnMu.Lock()
+	defer a.userConnMu.Unlock()
+
+	count := a.userConnCount[userId] + 1
+	if count > int64(a.Config.MaxConnsPerUser) {
+		return false
+	}
+	a.userConnCount[userId] = count
+	return true
+}
+
+// removeUserConn 减少用户连接计数
+func (a *App) RemoveUserConn(userId int64) {
+	a.userConnMu.Lock()
+	defer a.userConnMu.Unlock()
+
+	if count := a.userConnCount[userId] - 1; count > 0 {
+		a.userConnCount[userId] = count
+	} else {
+		delete(a.userConnCount, userId)
+	}
 }
 
 // New 创建应用对象
@@ -82,6 +183,8 @@ func New(cfg *config.Config) (*App, error) {
 		WorkerPool:     pool,
 		LoopRegistry:   NewLoopRegistry(),
 		LoopDispatcher: NewLoopDispatcher(),
+		userConnCount: make(map[int64]int64),
+		RateLimiter:   NewRateLimiter(cfg.MsgRatePerUser, cfg.MsgBurstCapacity),
 	}
 
 	defaultSensitiveWords := []string{
@@ -111,7 +214,48 @@ func New(cfg *config.Config) (*App, error) {
 		)
 	}
 
+	// 初始化 Registry
+	if cfg.RegistryType != "static" && cfg.RegistryAddr != "" {
+		a.Registry, err = registry.NewRegistry(cfg.RegistryType, cfg.RegistryAddr)
+		if err != nil {
+			return nil, fmt.Errorf("create registry: %w", err)
+		}
+
+		// 解析监听地址获取端口
+		addr := cfg.ListenAddr
+		port := 9000
+		if len(addr) > 0 {
+			// 格式: tcp://0.0.0.0:9000
+			for i := len(addr) - 1; i >= 0; i-- {
+				if addr[i] == ':' {
+					portStr := addr[i+1:]
+					fmt.Sscanf(portStr, "%d", &port)
+					break
+				}
+			}
+		}
+
+		a.ServiceInfo = &registry.ServiceInfo{
+			ID:   cfg.NodeId,
+			Name: cfg.ServiceName,
+			Addr: addr,
+			Port: port,
+			Tags: []string{},
+			Meta: map[string]string{
+				"hostname": hostname(),
+			},
+		}
+
+		a.Registrar = registry.NewServiceRegistrar(a.Registry, a.ServiceInfo)
+	}
+
 	return a, nil
+}
+
+// hostname 获取主机名
+func hostname() string {
+	h, _ := os.Hostname()
+	return h
 }
 
 // StartTextFilterReload 启动敏感词热更新。
@@ -254,6 +398,12 @@ func (a *App) handleJoinRoom(task *dispatcher.InboundTask, frame *pb.Frame) {
 		return
 	}
 
+	// 4. 单用户连接数限制检查
+	if !a.addUserConn(req.UserId) {
+		a.sendError(task, 429, "该账号连接数过多，请稍后重试")
+		return
+	}
+
 	task.Ctx.UserID = req.UserId
 	task.Ctx.RoomID = req.RoomId
 	task.Ctx.IsPremium = req.IsPremium
@@ -273,6 +423,13 @@ func (a *App) handleJoinRoom(task *dispatcher.InboundTask, frame *pb.Frame) {
 func (a *App) handleChat(task *dispatcher.InboundTask, frame *pb.Frame) {
 	if task.Ctx.RoomID <= 0 || task.Ctx.UserID <= 0 {
 		log.Printf("收到未入房用户消息，忽略: userID=%d roomID=%d", task.Ctx.UserID, task.Ctx.RoomID)
+		return
+	}
+
+	// 消息频率限制检查
+	if a.RateLimiter != nil && !a.RateLimiter.Allow(task.Ctx.UserID) {
+		metrics.RateLimitRejectCount.Add(1)
+		a.sendError(task, 429, "发送频率过快，请稍后重试")
 		return
 	}
 
@@ -602,6 +759,43 @@ func (a *App) Close() {
 		_ = a.Consumer.Close()
 		log.Println("Kafka Consumer 已关闭")
 	}
+	if a.Registrar != nil {
+		a.Registrar.Stop()
+		log.Println("服务注册已注销")
+	}
+	if a.MetricsServer != nil {
+		a.MetricsServer.Stop()
+		log.Println("Metrics HTTP 服务已关闭")
+	}
+}
+
+// StartMetricsServer 启动 metrics HTTP 服务
+func (a *App) StartMetricsServer(addr string) {
+	if addr == "" {
+		addr = ":9090" // 默认端口 9090
+	}
+	a.MetricsServer = NewMetricsServer(addr)
+	a.MetricsServer.Start()
+}
+
+// StartRegistry 启动服务注册
+func (a *App) StartRegistry(ctx context.Context) error {
+	if a.Registrar == nil {
+		return nil
+	}
+	if err := a.Registrar.Start(ctx); err != nil {
+		return fmt.Errorf("start registry: %w", err)
+	}
+	log.Printf("服务注册成功: nodeId=%s addr=%s:%d", a.Config.NodeId, a.Config.ListenAddr, a.ServiceInfo.Port)
+	return nil
+}
+
+// GetRegistryServices 获取注册中心中的服务列表
+func (a *App) GetRegistryServices(ctx context.Context, serviceName string) ([]*registry.ServiceInfo, error) {
+	if a.Registry == nil {
+		return nil, nil
+	}
+	return a.Registry.GetServices(ctx, serviceName)
 }
 
 

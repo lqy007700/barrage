@@ -39,6 +39,23 @@ type Config struct {
 
 	// BannedUsers 封禁用户 ID 列表
 	BannedUsers []int64
+
+	// Registry 注册中心配置
+	RegistryType string // "static", "consul", "etcd"
+	RegistryAddr string // 注册中心地址
+	NodeId       string // 节点唯一ID
+	ServiceName  string // 服务名称
+
+	// Metrics HTTP 服务地址
+	MetricsAddr string // 默认 :9090
+
+	// 连接限制配置
+	MaxConns         int // 节点最大连接数，默认 10万
+	MaxConnsPerUser  int // 单用户最大连接数，默认 3
+
+	// 消息频率限制
+	MsgRatePerUser   int // 单用户每秒允许消息数，默认 10
+	MsgBurstCapacity int // 消息突发容量，默认 20
 }
 
 // Load 返回默认配置
@@ -49,6 +66,9 @@ func Load() *Config {
 	hostname, _ := os.Hostname()
 	randSuffix := rand.Int63()
 	uniqueGroupID := fmt.Sprintf("barrage-%s-%d", hostname, randSuffix)
+
+	// 生成唯一节点ID
+	nodeId := fmt.Sprintf("barrage-%s-%d", hostname, os.Getpid())
 
 	// 协程池大小计算：CPU核数 * 4，限制最大 2048，避免创建过多协程
 	workerPoolSize := runtime.NumCPU() * 4
@@ -69,5 +89,22 @@ func Load() *Config {
 		},
 		KafkaTopic:   "barrage-broadcast",
 		KafkaGroupID: uniqueGroupID,
+
+		// Registry 配置
+		RegistryType: "static",
+		RegistryAddr: "",
+		NodeId:       nodeId,
+		ServiceName:  "barrage",
+
+		// Metrics HTTP 服务
+		MetricsAddr: ":9090",
+
+		// 连接限制配置
+		MaxConns:        100000, // 10万连接
+		MaxConnsPerUser: 3,      // 单用户最多3个连接
+
+		// 消息频率限制
+		MsgRatePerUser:   10, // 每秒10条
+		MsgBurstCapacity: 20, // 突发容量20条
 	}
 }
